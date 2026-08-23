@@ -1,0 +1,121 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #1b1712;
+  --ink-soft: #4a4338;
+  --paper: #f6f0e4;
+  --paper-2: #fffdf7;
+  --teal: #0f5c61;
+  --teal-deep: #08363a;
+  --teal-mid: #18747a;
+  --saffron: #c9842a;
+  --clay: #9a4a2a;
+  --emergency: #b42318;
+  --ok: #1f6b45;
+  --line: rgba(27, 23, 18, 0.12);
+}
+
+@theme inline {
+  --font-sans: var(--font-outfit);
+  --font-serif: var(--font-source);
+  --color-ink: var(--ink);
+  --color-paper: var(--paper);
+  --color-teal: var(--teal);
+  --color-saffron: var(--saffron);
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-outfit), ui-sans-serif, system-ui, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.serif {
+  font-family: var(--font-source), ui-serif, Georgia, serif;
+}
+
+.kiosk-bezel {
+  background:
+    radial-gradient(1200px 480px at 10% -10%, rgba(201, 132, 42, 0.18), transparent 50%),
+    radial-gradient(900px 500px at 100% 0%, rgba(24, 116, 122, 0.35), transparent 45%),
+    linear-gradient(180deg, #0b3c40 0%, #08292c 100%);
+}
+
+.ticket {
+  background:
+    repeating-linear-gradient(
+      -12deg,
+      transparent,
+      transparent 10px,
+      rgba(201, 132, 42, 0.06) 10px,
+      rgba(201, 132, 42, 0.06) 11px
+    ),
+    linear-gradient(180deg, #fffdf7, #f3e7cf);
+}
+
+.mesh-hero {
+  background:
+    linear-gradient(180deg, rgba(8, 41, 44, 0.28), rgba(8, 41, 44, 0.72)),
+    url("/images/hero-kiosk.jpg") center/cover no-repeat;
+}
+
+.prose-clinical p {
+  margin: 0 0 0.75rem;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c9b79a;
+  border-radius: 99px;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 rgba(180, 35, 24, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 16px rgba(180, 35, 24, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(180, 35, 24, 0);
+  }
+}
+
+.emergency-pulse {
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise 0.45s ease both;
+}
