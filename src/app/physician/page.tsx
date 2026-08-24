@@ -4,6 +4,7 @@ import { staffOrDemo } from "@/lib/auth";
 import { db } from "@/db";
 import { clinicalSummaries, patients, sessions } from "@/db/schema";
 import { PhysicianNav } from "@/components/physician/nav";
+import { DeleteSessionButton } from "@/components/physician/delete-session-button";
 import { seedIfEmpty } from "@/lib/seed";
 import { DEPARTMENTS } from "@/lib/types";
 import { desc, eq } from "drizzle-orm";
@@ -159,7 +160,10 @@ function QueueRow({
           <p className="mt-2 text-xs font-medium text-[#b42318]">{row.session.redFlagReasons[0]}</p>
         )}
       </div>
-      <div className="self-center text-sm text-[#0f5c61]">{accent === "done" ? "Open note" : "Review draft →"}</div>
+      <div className="flex items-center gap-3 self-center">
+  <span className="text-sm text-[#0f5c61]">{accent === "done" ? "Open note" : "Review draft →"}</span>
+  <DeleteSessionButton sessionId={row.session.id} label="" />
+</div>
     </Link>
   );
 }

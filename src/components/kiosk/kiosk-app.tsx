@@ -39,9 +39,12 @@ import {
   Thermometer,
   Volume2,
   Wind,
+  X,
+  Lock,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type Ans = { values: string[]; text: string; inputMode: InputMode };
 type Summary = {
@@ -98,6 +101,7 @@ export type KioskAccount = {
 };
 
 export function KioskApp({ account }: { account?: KioskAccount | null }) {
+  const router = useRouter();
   const [step, setStep] = useState<KioskStep>("language");
   const [lang, setLang] = useState<Lang>(
     (LANGUAGES.find((l) => l.code === account?.preferredLanguage)?.code ?? "en") as Lang,
@@ -115,7 +119,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
   // State for previous submissions
   const [pastSubmissions, setPastSubmissions] = useState<any[]>([]);
-  const [loadingPast, setLoadingPast] = useState(false);
+  const [selectedPastSession, setSelectedPastSession] = useState<any | null>(null);
 
   const [granted, setGranted] = useState<Record<string, boolean>>({
     data_capture: true,
@@ -161,7 +165,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     const abhaId = form.abhaId || account?.abhaId;
 
     if (phone || abhaId) {
-      setLoadingPast(true);
       let url = "/api/sessions";
       if (phone) url += `?phone=${encodeURIComponent(phone)}`;
       else if (abhaId) url += `?abhaId=${encodeURIComponent(abhaId)}`;
@@ -171,8 +174,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         .then((data) => {
           setPastSubmissions(data.sessions || []);
         })
-        .catch((err) => console.error("Error loading past submissions:", err))
-        .finally(() => setLoadingPast(false));
+        .catch((err) => console.error("Error loading past submissions:", err));
     }
   }, [step, account, form.phone, form.abhaId]);
 
@@ -182,7 +184,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setDraftValues(answers[qid]?.values ?? []);
     setHeard("");
     speak(question.text[lang] || question.text.en, lang);
-  }, [qid, step, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [qid, step, lang]);
 
   function stopMic() {
     stopRef.current?.();
@@ -209,6 +211,17 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       },
       () => setListening(false),
     );
+  }
+
+  // Ensure local profile is synced so "View Full Portal" doesn't fail
+  function handleGoToPortal() {
+    const profile = {
+      fullName: form.fullName || account?.fullName || "Patient",
+      phoneNumber: form.phone || account?.phone || "",
+      abhaId: form.abhaId || account?.abhaId || "",
+    };
+    localStorage.setItem("patient_profile", JSON.stringify(profile));
+    router.push("/portal");
   }
 
   async function createPatientAndSession() {
@@ -488,12 +501,13 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     <h3 className="text-sm font-bold uppercase tracking-wider text-[#08363a] flex items-center gap-2">
                       <Clock className="h-4 w-4 text-[#c9842a]" /> Past Submissions ({pastSubmissions.length})
                     </h3>
-                    <Link
-                      href="/portal"
+                    <button
+                      type="button"
+                      onClick={handleGoToPortal}
                       className="text-xs font-semibold text-teal-800 underline hover:text-teal-900"
                     >
                       View Full Portal →
-                    </Link>
+                    </button>
                   </div>
 
                   <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
@@ -524,12 +538,14 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                           </p>
                         </div>
 
-                        <Link
-                          href={`/physician/${sub.id}`}
+                        {/* SAFE PATIENT READ-ONLY MODAL (Replaces doctor portal link) */}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPastSession(sub)}
                           className="inline-flex items-center gap-1 bg-[#0f5c61] text-white px-3 py-1.5 rounded-full text-xs font-medium hover:bg-[#08363a]"
                         >
-                          <FileText className="h-3.5 w-3.5" /> Note
-                        </Link>
+                          <FileText className="h-3.5 w-3.5" /> View Note
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -865,7 +881,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                       value={draftText}
                       onChange={(e) => setDraftText(e.target.value)}
                       placeholder={question.placeholder?.[lang] || t("orType", lang)}
-                      className="mt-6 min-h-28 w-full rounded-3xl border border-[#1b1712]/12 bg-white px-4 py-3 text-lg"
+                      className="mt-6 min-h-28 w-full rounded-3xl border border-[#1b1712]/12 bg-white px-4 py-3 text-lg text-black"
                     />
                   )}
 
@@ -935,7 +951,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   value={paste}
                   onChange={(e) => setPaste(e.target.value)}
                   placeholder={t("pastePlaceholder", lang)}
-                  className="mt-3 min-h-28 w-full rounded-2xl border border-[#1b1712]/10 bg-white px-3 py-2"
+                  className="mt-3 min-h-28 w-full rounded-2xl border border-[#1b1712]/10 bg-white px-3 py-2 text-black"
                 />
                 <button
                   type="button"
@@ -1041,9 +1057,14 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 )}
               </div>
               <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <Link href={`/physician/${sessionId ?? ""}`} className="rounded-full bg-[#0f5c61] px-6 py-3 text-white">
-                  {t("openDoctorScreen", lang)}
-                </Link>
+                <button
+                  type="button"
+                  onClick={handleGoToPortal}
+                  className="rounded-full bg-[#0f5c61] px-6 py-3 text-white font-medium"
+                >
+                  View My Submissions Portal →
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -1074,29 +1095,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 >
                   {t("nextPatient", lang)}
                 </button>
-
-                {sessionId && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (confirm("Are you sure you want to delete your submitted details?")) {
-                        setBusy(true);
-                        try {
-                          await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
-                          alert("Your clinical submission has been deleted.");
-                          window.location.href = "/kiosk";
-                        } catch {
-                          alert("Failed to delete record.");
-                        } finally {
-                          setBusy(false);
-                        }
-                      }
-                    }}
-                    className="rounded-full bg-[#b42318]/10 text-[#b42318] px-6 py-3 font-medium hover:bg-[#b42318] hover:text-white transition"
-                  >
-                    Delete Submission
-                  </button>
-                )}
               </div>
             </div>
           )}
@@ -1111,6 +1109,73 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           </footer>
         )}
       </div>
+
+      {/* ── SAFE PATIENT READ-ONLY MODAL (Prevents unauthorized doctor portal access) ── */}
+      {selectedPastSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-3xl bg-white p-6 md:p-8 shadow-2xl border border-[#1b1712]/10 space-y-4 text-black">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div>
+                <span className="text-xs uppercase font-bold text-[#c9842a]">Patient Receipt & Summary</span>
+                <h3 className="text-xl font-bold text-[#08363a]">
+                  Token: {selectedPastSession.tokenNumber || "OPD"}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPastSession(null)}
+                className="p-2 text-gray-400 hover:text-black rounded-full hover:bg-gray-100"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-sm">
+              <div>
+                <span className="font-bold text-[#c9842a] uppercase text-xs">Chief Complaint</span>
+                <p className="mt-0.5 text-gray-800 font-medium">
+                  {selectedPastSession.summary?.chiefComplaint || selectedPastSession.department || "General Consultation"}
+                </p>
+              </div>
+
+              {selectedPastSession.summary?.hpi && (
+                <div>
+                  <span className="font-bold text-[#c9842a] uppercase text-xs">History of Present Illness</span>
+                  <p className="mt-0.5 text-gray-700">{selectedPastSession.summary.hpi}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2 text-xs bg-gray-50 p-3 rounded-xl">
+                <div>
+                  <span className="font-semibold text-gray-500 block">Care Mode</span>
+                  <span className="font-bold text-[#08363a] uppercase">{selectedPastSession.mode}</span>
+                </div>
+                <div>
+                  <span className="font-semibold text-gray-500 block">Submitted At</span>
+                  <span className="font-bold text-[#08363a]">
+                    {new Date(selectedPastSession.startedAt).toLocaleDateString("en-IN", {
+                      day: "numeric",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedPastSession(null)}
+                className="bg-[#0f5c61] text-white px-6 py-2.5 rounded-full font-medium text-sm hover:bg-[#08363a]"
+              >
+                Close Summary
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

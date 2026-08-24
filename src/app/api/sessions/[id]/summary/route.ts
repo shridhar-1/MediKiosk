@@ -7,6 +7,7 @@ import {
   sessions,
 } from "@/db/schema";
 import type { AyushAssessment } from "@/db/schema";
+import { currentStaff } from "@/lib/auth";
 import { nid } from "@/lib/ids";
 import { summarizeDocuments } from "@/lib/ocr";
 import { evaluateRedFlags } from "@/lib/redflags";
@@ -31,19 +32,15 @@ type SummaryFields = {
   ayushAssessment?: AyushAssessment | null;
 };
 
-// Helper to extract clean JSON from Gemini output
 function extractJsonFromText(text: string): any | null {
   try {
-    // 1. Try direct parse
     return JSON.parse(text);
   } catch {
     try {
-      // 2. Extract content between ```json and ```
       const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (jsonMatch && jsonMatch[1]) {
         return JSON.parse(jsonMatch[1]);
       }
-      // 3. Extract content between first { and last }
       const firstBrace = text.indexOf("{");
       const lastBrace = text.lastIndexOf("}");
       if (firstBrace !== -1 && lastBrace !== -1) {
@@ -204,7 +201,6 @@ export async function POST(
     const flags = evaluateRedFlags(map);
     const { investigationsSummary, medicationsExtracted } = summarizeDocuments(docs);
 
-    // Fallback Local Generator
     const localFields = generateSummaryFields(
       patient,
       map,
@@ -213,16 +209,18 @@ export async function POST(
       medicationsExtracted
     ) as SummaryFields;
 
-    // Build raw text strings for Gemini AI
-    const answersText = answerRows
-      .map((a: any) => `Question (${a.questionKey}): ${a.text || (Array.isArray(a.values) ? a.values.join(", ") : "N/A")}`)
+    // FIX: build AI text from the RESOLVED answers map, not raw rows.
+    const answersText = Object.entries(map)
+      .map(([key, ans]) => {
+        const value = (ans.text ?? "").trim() || (ans.values ?? []).join(", ");
+        return `Question (${key}): ${value || "N/A"}`;
+      })
       .join("\n");
 
     const docsText = docs
       .map((d: any) => `Document (${d.docType}): ${d.sourceText || JSON.stringify(d.extractedJson || {})}`)
       .join("\n");
 
-    // Execute Real Gemini AI Summarization
     const { fields: aiFields, error: aiError } = await generateWithGeminiAI({
       patientName: patient.fullName,
       age: patient.age,
@@ -296,6 +294,86 @@ export async function POST(
     return Response.json(
       { error: error?.message || "Failed to generate summary" },
       { status: 500 }
+    );
+  }
+}
+
+const EDITABLE_FIELDS = [
+  "chiefComplaint",
+  "hpi",
+  "pastMedical",
+  "pastSurgical",
+  "drugs",
+  "allergies",
+  "familyHistory",
+  "personalHistory",
+  "reviewOfSystems",
+  "investigationsSummary",
+  "medicationsExtracted",
+] as const;
+
+// NEW: staff-only PATCH so "Save amendments" / "Confirm to HIS" actually work.
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    const member = await currentStaff();
+    if (!member) {
+      return Response.json({ error: "Staff authentication required" }, { status: 401 });
+    }
+
+    const { id } = await context.params;
+    const body = (await request.json()) as {
+      fields?: Record<string, string>;
+      status?: "draft" | "confirmed";
+      reviewedBy?: string;
+      physicianNotes?: string;
+    };
+
+    const [existing] = await db
+      .select()
+      .from(clinicalSummaries)
+      .where(eq(clinicalSummaries.sessionId, id))
+      .limit(1);
+
+    if (!existing) {
+      return Response.json({ error: "No summary to edit for this session" }, { status: 404 });
+    }
+
+    const set: Record<string, unknown> = {};
+    if (body.fields) {
+      for (const key of EDITABLE_FIELDS) {
+        if (key in body.fields) set[key] = body.fields[key];
+      }
+    }
+    if (body.status === "confirmed" || body.status === "draft") {
+      set.status = body.status;
+      if (body.status === "confirmed") set.confirmedAt = new Date();
+    }
+    if (body.reviewedBy !== undefined) set.reviewedBy = body.reviewedBy;
+    if (body.physicianNotes !== undefined) {
+      await db
+        .update(sessions)
+        .set({
+          physicianNotes: body.physicianNotes,
+          ...(body.status === "confirmed" ? { status: "reviewed", reviewedAt: new Date(), reviewedBy: body.reviewedBy ?? member.fullName } : {}),
+        })
+        .where(eq(sessions.id, id));
+    }
+
+    const [updated] = await db
+      .update(clinicalSummaries)
+      .set(Object.keys(set).length ? set : { generatedAt: new Date() })
+      .where(eq(clinicalSummaries.id, existing.id))
+      .returning();
+
+    return Response.json({ summary: updated });
+  } catch (error: any) {
+    console.error("PATCH /summary failed:", error);
+    return Response.json(
+      { error: error?.message || "Failed to update summary" },
+      { status: 500 },
     );
   }
 }
