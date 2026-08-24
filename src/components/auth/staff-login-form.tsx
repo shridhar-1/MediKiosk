@@ -10,18 +10,39 @@ export function StaffLoginForm() {
   const [busy, setBusy] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
+  const [generatedOtp, setGeneratedOtp] = useState("");
 
-  function handleRequestOTP(e: React.FormEvent) {
+  async function handleRequestOTP(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    setTimeout(() => {
-      setBusy(false);
-      setOtpSent(true);
-    }, 800);
+
+    // Generate a random 6-digit OTP
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedOtp(newOtp);
+
+    try {
+      await fetch("/api/auth/send-email-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, otp: newOtp }),
+      });
+    } catch (error) {
+      console.error("Failed to send email OTP", error);
+    }
+    
+    setBusy(false);
+    setOtpSent(true);
   }
 
   async function verifyOTP(e: React.FormEvent) {
     e.preventDefault();
+    
+    // Validate the OTP before proceeding
+    if (otp !== generatedOtp) {
+      alert("Invalid Access Code. Please try again.");
+      return;
+    }
+
     setBusy(true);
     try {
       await fetch("/api/auth/demo", {
@@ -50,7 +71,7 @@ export function StaffLoginForm() {
         </div>
         <h1 className="serif mt-2 text-4xl">Facility Authentication</h1>
         <p className="mt-2 text-sm text-[#4a4338]">
-          A secure access code has been sent to <strong>{email || "your email"}</strong>. Enter it below to access the console.
+          A secure access code has been sent to <strong>{email}</strong>. Enter it below to access the console.
         </p>
         <form onSubmit={verifyOTP} className="mt-8 space-y-6">
           <input
