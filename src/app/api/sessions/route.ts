@@ -6,10 +6,15 @@ import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
-// GET /api/sessions -> Fetch all sessions with patient info & AI summary
-export async function GET() {
+// GET /api/sessions?phone=... OR ?abhaId=... OR ?patientId=...
+export async function GET(request: Request) {
   try {
     await seedIfEmpty();
+
+    const { searchParams } = new URL(request.url);
+    const patientId = searchParams.get("patientId");
+    const phone = searchParams.get("phone");
+    const abhaId = searchParams.get("abhaId");
 
     const rows = await db
       .select({
@@ -22,8 +27,18 @@ export async function GET() {
       .leftJoin(clinicalSummaries, eq(clinicalSummaries.sessionId, sessions.id))
       .orderBy(desc(sessions.startedAt));
 
+    // Filter by query parameters if present
+    let filteredRows = rows;
+    if (patientId) {
+      filteredRows = rows.filter((r) => r.patient.id === patientId);
+    } else if (phone) {
+      filteredRows = rows.filter((r) => r.patient.phone === phone);
+    } else if (abhaId) {
+      filteredRows = rows.filter((r) => r.patient.abhaId === abhaId);
+    }
+
     return Response.json({
-      sessions: rows.map((r) => ({
+      sessions: filteredRows.map((r) => ({
         ...r.session,
         patient: r.patient,
         summary: r.summary,
@@ -95,7 +110,7 @@ export async function POST(request: Request) {
   }
 }
 
-// DELETE /api/sessions -> Clear/Reset all sessions (Optional Queue Reset)
+// DELETE /api/sessions -> Clear all sessions
 export async function DELETE() {
   try {
     await db.delete(clinicalSummaries);

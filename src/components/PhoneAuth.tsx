@@ -150,7 +150,7 @@ export default function PhoneAuth() {
     try {
       await abhaConfirmation.confirm(abhaOtp);
       setMessage("ABHA login successful! Redirecting...");
-      setTimeout(() => router.push("/kiosk"), 800);
+      setTimeout(() => router.push("/patient/portal"), 800);
     } catch {
       setMessage("Invalid OTP code. Please try again.");
       setLoading(false);
