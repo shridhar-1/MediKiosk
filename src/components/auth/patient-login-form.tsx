@@ -3,7 +3,7 @@
 import { LANGUAGES } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, ArrowLeft, ShieldCheck } from "lucide-react";
 
 type Tab = "signin" | "register";
 
@@ -11,6 +11,9 @@ export function PatientLoginForm() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("signin");
   const [busy, setBusy] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
+  
   const [identifier, setIdentifier] = useState("");
   const [reg, setReg] = useState({
     fullName: "",
@@ -21,9 +24,22 @@ export function PatientLoginForm() {
     preferredLanguage: "en",
   });
 
-  async function enter(payload: Record<string, unknown>) {
+  // Step 1: Simulate sending the OTP
+  function handleRequestOTP(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setTimeout(() => {
+      setBusy(false);
+      setOtpSent(true);
+    }, 800); // Feels like a real network request
+  }
+
+  // Step 2: Verify OTP and enter
+  async function verifyOTP(e: React.FormEvent) {
+    e.preventDefault();
     setBusy(true);
     try {
+      const payload = tab === "signin" ? { identifier } : reg;
       await fetch("/api/auth/demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -36,15 +52,45 @@ export function PatientLoginForm() {
     router.refresh();
   }
 
+  if (otpSent) {
+    return (
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <button 
+          onClick={() => setOtpSent(false)} 
+          className="mb-6 flex items-center gap-2 text-sm text-[#4a4338] hover:text-[#0f5c61] transition"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
+        <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full bg-[#0f5c61]/10 text-[#0f5c61]">
+          <ShieldCheck className="h-6 w-6" />
+        </div>
+        <h1 className="serif mt-2 text-4xl">Enter Verification Code</h1>
+        <p className="mt-2 text-sm text-[#4a4338]">
+          We sent a secure 6-digit code to your registered device. Enter it below to verify your identity.
+        </p>
+        <form onSubmit={verifyOTP} className="mt-8 space-y-6">
+          <input
+            value={otp}
+            onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+            placeholder="000000"
+            inputMode="numeric"
+            className="w-full text-center text-3xl tracking-[0.5em] rounded-2xl border border-[#1b1712]/12 bg-white px-4 py-4 outline-none focus:border-[#0f5c61]"
+          />
+          <Submit busy={busy} label="Verify and Enter" />
+        </form>
+      </div>
+    );
+  }
+
   return (
-    <div>
+    <div className="animate-in fade-in duration-500">
       <p className="text-[11px] uppercase tracking-[0.22em] text-[#c9842a]">Patient portal</p>
       <h1 className="serif mt-2 text-4xl">
         {tab === "signin" ? "Welcome back" : "Create your health login"}
       </h1>
       <p className="mt-2 text-sm text-[#4a4338]">
         {tab === "signin"
-          ? "Enter your ABHA ID or mobile number to continue securely."
+          ? "Enter your ABHA ID or mobile number to receive a secure OTP."
           : "Register a new profile to begin your clinical history intake."}
       </p>
 
@@ -64,29 +110,17 @@ export function PatientLoginForm() {
       </div>
 
       {tab === "signin" ? (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void enter({ identifier });
-          }}
-          className="mt-6 space-y-4"
-        >
+        <form onSubmit={handleRequestOTP} className="mt-6 space-y-4">
           <Field
             label="ABHA ID or mobile number"
             value={identifier}
             onChange={setIdentifier}
             placeholder="9810011122"
           />
-          <Submit busy={busy} label="Enter patient portal" />
+          <Submit busy={busy} label="Request OTP" />
         </form>
       ) : (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void enter(reg);
-          }}
-          className="mt-6 space-y-4"
-        >
+        <form onSubmit={handleRequestOTP} className="mt-6 space-y-4">
           <Field label="Full name" value={reg.fullName} onChange={(v) => setReg({ ...reg, fullName: v })} />
           <div className="grid grid-cols-2 gap-3">
             <Field
@@ -115,12 +149,6 @@ export function PatientLoginForm() {
             inputMode="numeric"
             placeholder="10-digit number"
           />
-          <Field
-            label="ABHA ID (optional)"
-            value={reg.abhaId}
-            onChange={(v) => setReg({ ...reg, abhaId: v })}
-            placeholder="12-3456-7890-1234"
-          />
           <label className="block">
             <span className="mb-1.5 block text-sm text-[#4a4338]">Preferred language</span>
             <select
@@ -135,26 +163,14 @@ export function PatientLoginForm() {
               ))}
             </select>
           </label>
-          <Submit busy={busy} label="Create and continue" />
+          <Submit busy={busy} label="Send Verification Code" />
         </form>
       )}
     </div>
   );
 }
 
-function Field({
-  label,
-  value,
-  onChange,
-  placeholder,
-  inputMode,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  inputMode?: "numeric" | "text";
-}) {
+function Field({ label, value, onChange, placeholder, inputMode }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; inputMode?: "numeric" | "text"; }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm text-[#4a4338]">{label}</span>
@@ -174,7 +190,7 @@ function Submit({ busy, label }: { busy: boolean; label: string }) {
     <button
       type="submit"
       disabled={busy}
-      className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#0f5c61] px-6 py-3.5 font-semibold text-white disabled:opacity-60"
+      className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#0f5c61] px-6 py-3.5 font-semibold text-white disabled:opacity-60 transition"
     >
       {busy && <Loader2 className="h-4 w-4 animate-spin" />}
       {label}
