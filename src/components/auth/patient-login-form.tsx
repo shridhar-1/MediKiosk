@@ -3,7 +3,7 @@
 import { LANGUAGES } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowRight, Loader2, ShieldCheck } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 type Tab = "signin" | "register";
 
@@ -11,7 +11,6 @@ export function PatientLoginForm() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("signin");
   const [busy, setBusy] = useState(false);
-
   const [identifier, setIdentifier] = useState("");
   const [reg, setReg] = useState({
     fullName: "",
@@ -31,7 +30,7 @@ export function PatientLoginForm() {
         body: JSON.stringify({ kind: "patient", ...payload }),
       });
     } catch {
-      // Demo mode never blocks entry.
+      // Login API fallback
     }
     router.replace("/portal");
     router.refresh();
@@ -45,8 +44,8 @@ export function PatientLoginForm() {
       </h1>
       <p className="mt-2 text-sm text-[#4a4338]">
         {tab === "signin"
-          ? "Enter your ABHA ID or mobile number to continue. This demo opens straight away."
-          : "Tell us as much or as little as you like — the demo lets you straight in."}
+          ? "Enter your ABHA ID or mobile number to continue securely."
+          : "Register a new profile to begin your clinical history intake."}
       </p>
 
       <div className="mt-6 flex gap-2 rounded-full bg-[#f0e8d8] p-1">
@@ -131,7 +130,7 @@ export function PatientLoginForm() {
             >
               {LANGUAGES.map((l) => (
                 <option key={l.code} value={l.code}>
-                  {l.native} · {l.label}
+                  {l.native} — {l.label}
                 </option>
               ))}
             </select>
@@ -139,20 +138,6 @@ export function PatientLoginForm() {
           <Submit busy={busy} label="Create and continue" />
         </form>
       )}
-
-      <button
-        type="button"
-        onClick={() => void enter({})}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-[#0f5c61]/25 px-6 py-3 text-sm font-medium text-[#0f5c61] hover:bg-[#0f5c61]/5"
-      >
-        Skip and explore as a patient <ArrowRight className="h-4 w-4" />
-      </button>
-
-      <p className="mt-6 flex items-start gap-2 text-xs leading-relaxed text-[#4a4338]">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-[#0f5c61]" />
-        Demonstration environment — no passwords or OTPs are collected. In a live deployment this
-        screen would authenticate against ABDM and the Digital Personal Data Protection Act, 2023.
-      </p>
     </div>
   );
 }
