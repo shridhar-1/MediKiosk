@@ -33,6 +33,7 @@ import {
   Mic,
   MoreHorizontal,
   ScanLine,
+  ShieldAlert,
   Thermometer,
   Volume2,
   Wind,
@@ -340,6 +341,16 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     }
   }
 
+  const saveSessionForPhysician = (kioskData: any) => {
+    const patientProfile = JSON.parse(localStorage.getItem("patient_profile") || "{}");
+    const fullClinicalSession = {
+      patient: patientProfile,
+      kioskData: kioskData,
+      timestamp: new Date().toLocaleTimeString(),
+    };
+    localStorage.setItem("latest_physician_queue", JSON.stringify(fullClinicalSession));
+  };
+
   async function submit() {
     if (!sessionId) return;
     setBusy(true);
@@ -347,6 +358,9 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       const res = await fetch(`/api/sessions/${sessionId}/submit`, { method: "POST" });
       const data = (await res.json()) as { session: { tokenNumber: string | null } };
       setToken(data.session.tokenNumber ?? token);
+      
+      saveSessionForPhysician(summary);
+      
       setStep("complete");
     } finally {
       setBusy(false);
@@ -614,164 +628,199 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
           {step === "interview" && question && (
             <div className="rise mx-auto max-w-4xl">
-              <div className="flex items-center justify-between text-sm text-[#4a4338]">
-                <span>
-                  {progress.current} / {progress.total}
-                </span>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-[#0f5c61]"
-                  onClick={() => speak(question.text[lang] || question.text.en, lang)}
-                >
-                  <Volume2 className="h-4 w-4" /> {t("listen", lang)}
-                </button>
-              </div>
-              <h1 className="serif mt-3 text-3xl leading-snug md:text-4xl">{question.text[lang] || question.text.en}</h1>
-              {question.help && <p className="mt-2 text-[#4a4338]">{question.help[lang]}</p>}
-              <p className="mt-2 text-sm text-[#c9842a]">{t("tapOrSpeak", lang)}</p>
+              {flags?.triggered && flags.priority === "emergency" ? (
+                <div className="mt-8 rounded-[32px] bg-[#b42318] p-8 text-center text-white shadow-2xl">
+                  <ShieldAlert className="mx-auto h-20 w-20 opacity-90" />
+                  <h1 className="serif mt-6 text-4xl md:text-5xl">Medical Emergency Detected</h1>
+                  <p className="mt-4 text-lg text-white/90">
+                    Based on the symptoms you just provided, you require immediate medical attention. 
+                    Please stop this questionnaire and proceed directly to the Emergency Triage Desk.
+                  </p>
+                  
+                  <div className="mt-6 inline-block rounded-xl bg-black/20 p-4 text-left">
+                    <p className="text-sm font-semibold uppercase tracking-wider text-white/70">Flagged Symptoms:</p>
+                    <ul className="mt-2 list-disc pl-5 text-sm text-white/90">
+                      {flags.reasons.map((r, idx) => (
+                        <li key={idx}>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
 
-              {question.type === "chips" && question.options && (
-                <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-                  {question.options.map((opt) => {
-                    const Icon = ICONS[opt.icon ?? "more"] ?? MoreHorizontal;
-                    const on = draftValues.includes(opt.id);
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          const values = [opt.id];
-                          setDraftValues(values);
-                          void commitAndAdvance({ values, text: draftText, inputMode: "touch" });
-                        }}
-                        className={`flex min-h-24 flex-col items-start rounded-3xl border px-4 py-4 text-left ${
-                          on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
-                        }`}
-                      >
-                        <Icon className="h-5 w-5 opacity-80" />
-                        <span className="mt-2 font-medium leading-snug">{opt.label[lang] || opt.label.en}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {(question.type === "single" || question.type === "yesno") && (
-                <div className="mt-6 grid gap-3 md:grid-cols-2">
-                  {(question.type === "yesno" ? YES_NO_OPTIONS : question.options ?? []).map((opt) => {
-                    const on = draftValues.includes(opt.id);
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setDraftValues([opt.id]);
-                          if (question.type === "yesno" || question.type === "single") {
-                            void commitAndAdvance({ values: [opt.id], text: draftText, inputMode: "touch" });
-                          }
-                        }}
-                        className={`min-h-16 rounded-3xl border px-5 py-4 text-left text-lg ${
-                          on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
-                        }`}
-                      >
-                        {opt.label[lang] || opt.label.en}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {question.type === "multi" && question.options && (
-                <div className="mt-6 grid gap-3 md:grid-cols-2">
-                  {question.options.map((opt) => {
-                    const on = draftValues.includes(opt.id);
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          setDraftValues((curr) => {
-                            if (opt.id.startsWith("none") || opt.id === "no_travel" || opt.id === "nothing_worse" || opt.id === "nothing_better") {
-                              return [opt.id];
-                            }
-                            const withoutNone = curr.filter((id) => !id.startsWith("none") && id !== "no_travel");
-                            return on ? withoutNone.filter((id) => id !== opt.id) : [...withoutNone, opt.id];
-                          });
-                        }}
-                        className={`min-h-14 rounded-3xl border px-5 py-3.5 text-left ${
-                          on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
-                        }`}
-                      >
-                        {opt.label[lang] || opt.label.en}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {question.type === "scale" && (
-                <div className="mt-8">
-                  <div className="flex justify-between gap-1">
-                    {Array.from({ length: 11 }, (_, n) => (
-                      <button
-                        key={n}
-                        type="button"
-                        onClick={() => {
-                          setDraftValues([String(n)]);
-                          void commitAndAdvance({ values: [String(n)], text: "", inputMode: "touch" });
-                        }}
-                        className={`h-14 flex-1 rounded-2xl text-sm font-semibold ${
-                          draftValues[0] === String(n)
-                            ? "bg-[#0f5c61] text-white"
-                            : n >= 8
-                              ? "bg-[#f4d4cf]"
-                              : n >= 4
-                                ? "bg-[#f3e1c0]"
-                                : "bg-[#dceee8]"
-                        }`}
-                      >
-                        {n}
-                      </button>
-                    ))}
+                  <div className="mt-10">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopMic();
+                        void submit(); // Submits the partial data to the doctor immediately
+                      }}
+                      className="rounded-full bg-white px-8 py-4 text-lg font-bold text-[#b42318] shadow-lg transition hover:bg-gray-100"
+                    >
+                      End Session & Alert Triage Desk
+                    </button>
                   </div>
                 </div>
-              )}
+              ) : (
+                <>
+                  <div className="flex items-center justify-between text-sm text-[#4a4338]">
+                    <span>
+                      {progress.current} / {progress.total}
+                    </span>
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 text-[#0f5c61]"
+                      onClick={() => speak(question.text[lang] || question.text.en, lang)}
+                    >
+                      <Volume2 className="h-4 w-4" /> {t("listen", lang)}
+                    </button>
+                  </div>
+                  <h1 className="serif mt-3 text-3xl leading-snug md:text-4xl">{question.text[lang] || question.text.en}</h1>
+                  {question.help && <p className="mt-2 text-[#4a4338]">{question.help[lang]}</p>}
+                  <p className="mt-2 text-sm text-[#c9842a]">{t("tapOrSpeak", lang)}</p>
 
-              {(question.type === "text" || question.type === "chips" || question.optional) && (
-                <textarea
-                  value={draftText}
-                  onChange={(e) => setDraftText(e.target.value)}
-                  placeholder={question.placeholder?.[lang] || t("orType", lang)}
-                  className="mt-6 min-h-28 w-full rounded-3xl border border-[#1b1712]/12 bg-white px-4 py-3 text-lg"
-                />
-              )}
+                  {question.type === "chips" && question.options && (
+                    <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {question.options.map((opt) => {
+                        const Icon = ICONS[opt.icon ?? "more"] ?? MoreHorizontal;
+                        const on = draftValues.includes(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              const values = [opt.id];
+                              setDraftValues(values);
+                              void commitAndAdvance({ values, text: draftText, inputMode: "touch" });
+                            }}
+                            className={`flex min-h-24 flex-col items-start rounded-3xl border px-4 py-4 text-left ${
+                              on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
+                            }`}
+                          >
+                            <Icon className="h-5 w-5 opacity-80" />
+                            <span className="mt-2 font-medium leading-snug">{opt.label[lang] || opt.label.en}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
-              {heard && (
-                <p className="mt-3 rounded-2xl bg-[#f6f0e4] px-4 py-2 text-sm">
-                  “{heard}”
-                </p>
-              )}
+                  {(question.type === "single" || question.type === "yesno") && (
+                    <div className="mt-6 grid gap-3 md:grid-cols-2">
+                      {(question.type === "yesno" ? YES_NO_OPTIONS : question.options ?? []).map((opt) => {
+                        const on = draftValues.includes(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              setDraftValues([opt.id]);
+                              if (question.type === "yesno" || question.type === "single") {
+                                void commitAndAdvance({ values: [opt.id], text: draftText, inputMode: "touch" });
+                              }
+                            }}
+                            className={`min-h-16 rounded-3xl border px-5 py-4 text-left text-lg ${
+                              on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
+                            }`}
+                          >
+                            {opt.label[lang] || opt.label.en}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
 
-              <Nav
-                lang={lang}
-                onBack={goBackQuestion}
-                onNext={() => void commitAndAdvance()}
-                nextLabel={t("nextQuestion", lang)}
-                listening={listening}
-                onSpeak={() =>
-                  toggleMic((text) => {
-                    setDraftText(text);
-                    if (question.options) {
-                      const hits = matchSpokenToOptions(text, question);
-                      if (hits.length) setDraftValues(question.type === "multi" ? hits : [hits[0]]);
+                  {question.type === "multi" && question.options && (
+                    <div className="mt-6 grid gap-3 md:grid-cols-2">
+                      {question.options.map((opt) => {
+                        const on = draftValues.includes(opt.id);
+                        return (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => {
+                              setDraftValues((curr) => {
+                                if (opt.id.startsWith("none") || opt.id === "no_travel" || opt.id === "nothing_worse" || opt.id === "nothing_better") {
+                                  return [opt.id];
+                                }
+                                const withoutNone = curr.filter((id) => !id.startsWith("none") && id !== "no_travel");
+                                return on ? withoutNone.filter((id) => id !== opt.id) : [...withoutNone, opt.id];
+                              });
+                            }}
+                            className={`min-h-14 rounded-3xl border px-5 py-3.5 text-left ${
+                              on ? "border-[#0f5c61] bg-[#0f5c61] text-white" : "border-[#1b1712]/10 bg-white"
+                            }`}
+                          >
+                            {opt.label[lang] || opt.label.en}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {question.type === "scale" && (
+                    <div className="mt-8">
+                      <div className="flex justify-between gap-1">
+                        {Array.from({ length: 11 }, (_, n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => {
+                              setDraftValues([String(n)]);
+                              void commitAndAdvance({ values: [String(n)], text: "", inputMode: "touch" });
+                            }}
+                            className={`h-14 flex-1 rounded-2xl text-sm font-semibold ${
+                              draftValues[0] === String(n)
+                                ? "bg-[#0f5c61] text-white"
+                                : n >= 8
+                                  ? "bg-[#f4d4cf]"
+                                  : n >= 4
+                                    ? "bg-[#f3e1c0]"
+                                    : "bg-[#dceee8]"
+                            }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {(question.type === "text" || question.type === "chips" || question.optional) && (
+                    <textarea
+                      value={draftText}
+                      onChange={(e) => setDraftText(e.target.value)}
+                      placeholder={question.placeholder?.[lang] || t("orType", lang)}
+                      className="mt-6 min-h-28 w-full rounded-3xl border border-[#1b1712]/12 bg-white px-4 py-3 text-lg"
+                    />
+                  )}
+
+                  {heard && (
+                    <p className="mt-3 rounded-2xl bg-[#f6f0e4] px-4 py-2 text-sm">
+                      “{heard}”
+                    </p>
+                  )}
+
+                  <Nav
+                    lang={lang}
+                    onBack={goBackQuestion}
+                    onNext={() => void commitAndAdvance()}
+                    nextLabel={t("nextQuestion", lang)}
+                    listening={listening}
+                    onSpeak={() =>
+                      toggleMic((text) => {
+                        setDraftText(text);
+                        if (question.options) {
+                          const hits = matchSpokenToOptions(text, question);
+                          if (hits.length) setDraftValues(question.type === "multi" ? hits : [hits[0]]);
+                        }
+                        if (question.type === "scale") {
+                          const n = text.match(/\b(10|[0-9])\b/);
+                          if (n) setDraftValues([n[1]]);
+                        }
+                      })
                     }
-                    if (question.type === "scale") {
-                      const n = text.match(/\b(10|[0-9])\b/);
-                      if (n) setDraftValues([n[1]]);
-                    }
-                  })
-                }
-              />
+                  />
+                </>
+              )}
             </div>
           )}
 
