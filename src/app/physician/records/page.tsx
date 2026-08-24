@@ -8,6 +8,7 @@ import { DeleteSessionButton } from "@/components/physician/delete-session-butto
 import { seedIfEmpty } from "@/lib/seed";
 import { DEPARTMENTS } from "@/lib/types";
 import { desc, eq } from "drizzle-orm";
+import { DeletePatientButton } from "@/components/physician/delete-patient-button";
 
 export const dynamic = "force-dynamic";
 
