@@ -9,7 +9,7 @@ import {
   getAuth,
 } from "firebase/auth";
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { Phone, CreditCard, Shield } from "lucide-react";
+import { Phone, CreditCard, ShieldAlert, ArrowRight, CheckCircle2 } from "lucide-react";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -18,6 +18,13 @@ const firebaseConfig = {
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Demo Database of registered ABHA IDs and their linked phone numbers
+const REGISTERED_ABHA_DATABASE: Record<string, string> = {
+  "12345678901234": "+919972752670",
+  "12-3456-7890-1234": "+919972752670",
+  "98765432109876": "+919876543210",
 };
 
 type LoginMethod = "phone" | "abha";
@@ -34,6 +41,11 @@ export default function PhoneAuth() {
 
   // ABHA state
   const [abhaId, setAbhaId] = useState("");
+  const [abhaStep, setAbhaStep] = useState<"enter_abha" | "verify_otp">("enter_abha");
+  const [linkedPhone, setLinkedPhone] = useState("");
+  const [abhaOtp, setAbhaOtp] = useState("");
+  const [abhaConfirmation, setAbhaConfirmation] = useState<ConfirmationResult | null>(null);
+  const [abhaNotFound, setAbhaNotFound] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -54,6 +66,7 @@ export default function PhoneAuth() {
     }
   }, []);
 
+  // --- PHONE LOGIN FLOW ---
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -88,16 +101,61 @@ export default function PhoneAuth() {
     }
   };
 
-  const handleAbhaLogin = (e: React.FormEvent) => {
+  // --- ABHA LOGIN FLOW ---
+  const handleVerifyAbha = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!abhaId || abhaId.length < 8) {
-      setMessage("Enter a valid ABHA number (e.g. 12-3456-7890-1234)");
+    setLoading(true);
+    setMessage("");
+    setAbhaNotFound(false);
+
+    const cleanAbha = abhaId.replace(/-/g, "").trim();
+
+    // Check if ABHA exists in system/database
+    const foundPhone = REGISTERED_ABHA_DATABASE[cleanAbha] || REGISTERED_ABHA_DATABASE[abhaId];
+
+    if (!foundPhone) {
+      setLoading(false);
+      setAbhaNotFound(true);
+      setMessage("No ABHA linked account found. Please go and sign up.");
       return;
     }
+
+    // ABHA Found! Trigger Phone OTP to the linked phone number
+    try {
+      setLinkedPhone(foundPhone);
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      
+      const confirmation = await signInWithPhoneNumber(auth, foundPhone, window.recaptchaVerifier);
+      setAbhaConfirmation(confirmation);
+      setAbhaStep("verify_otp");
+      setMessage(`ABHA verified! OTP sent to linked phone ending in ...${foundPhone.slice(-4)}`);
+    } catch (error: any) {
+      console.error(error);
+      setMessage(`Failed to send OTP to linked phone: ${error.message || "Error"}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyAbhaOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!abhaConfirmation) return;
     setLoading(true);
-    setMessage("ABHA verified! Redirecting...");
-    // TODO: Connect real ABHA API later
-    setTimeout(() => router.push("/kiosk"), 1000);
+    setMessage("");
+    try {
+      await abhaConfirmation.confirm(abhaOtp);
+      setMessage("ABHA login successful! Redirecting...");
+      setTimeout(() => router.push("/kiosk"), 800);
+    } catch {
+      setMessage("Invalid OTP code. Please try again.");
+      setLoading(false);
+    }
+  };
+
+  const maskPhone = (phone: string) => {
+    if (!phone) return "";
+    return `${phone.slice(0, 3)} ******${phone.slice(-4)}`;
   };
 
   return (
@@ -106,30 +164,58 @@ export default function PhoneAuth() {
 
       {/* Method Tabs */}
       <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-        <button type="button" onClick={() => { setMethod("phone"); setMessage(""); setIsOtpSent(false); }}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${method === "phone" ? "bg-teal-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+        <button
+          type="button"
+          onClick={() => {
+            setMethod("phone");
+            setMessage("");
+            setIsOtpSent(false);
+            setAbhaNotFound(false);
+          }}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${
+            method === "phone" ? "bg-teal-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
           <Phone className="h-4 w-4" /> Phone OTP
         </button>
-        <button type="button" onClick={() => { setMethod("abha"); setMessage(""); }}
-          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${method === "abha" ? "bg-teal-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+        <button
+          type="button"
+          onClick={() => {
+            setMethod("abha");
+            setMessage("");
+            setAbhaStep("enter_abha");
+            setAbhaNotFound(false);
+          }}
+          className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-medium transition-colors ${
+            method === "abha" ? "bg-teal-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"
+          }`}
+        >
           <CreditCard className="h-4 w-4" /> ABHA ID
         </button>
       </div>
 
       <div id="recaptcha-container"></div>
 
-      {/* PHONE LOGIN */}
+      {/* ── METHOD 1: PHONE LOGIN ── */}
       {method === "phone" && (
         !isOtpSent ? (
           <form onSubmit={handleSendOtp} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
-              <input type="tel" placeholder="e.g. 9876543210" value={phoneNumber}
-                onChange={(e) => setPhoneNumber(e.target.value)} required
-                className="w-full p-2.5 border rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none" />
+              <input
+                type="tel"
+                placeholder="e.g. 9876543210"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                required
+                className="w-full p-2.5 border rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
             </div>
-            <button type="submit" disabled={loading}
-              className="w-full bg-teal-600 text-white py-2.5 rounded-lg font-medium hover:bg-teal-700 disabled:bg-gray-400">
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-teal-600 text-white py-2.5 rounded-lg font-medium hover:bg-teal-700 disabled:bg-gray-400"
+            >
               {loading ? "Sending..." : "Send OTP"}
             </button>
           </form>
@@ -137,40 +223,110 @@ export default function PhoneAuth() {
           <form onSubmit={handleVerifyOtp} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Enter 6-Digit OTP</label>
-              <input type="text" placeholder="123456" value={otp} maxLength={6}
-                onChange={(e) => setOtp(e.target.value)} required
-                className="w-full p-2.5 border rounded-lg text-center text-lg tracking-widest text-black focus:ring-2 focus:ring-teal-500 focus:outline-none" />
+              <input
+                type="text"
+                placeholder="123456"
+                value={otp}
+                maxLength={6}
+                onChange={(e) => setOtp(e.target.value)}
+                required
+                className="w-full p-2.5 border rounded-lg text-center text-lg tracking-widest text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
             </div>
-            <button type="submit" disabled={loading}
-              className="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-medium hover:bg-emerald-700 disabled:bg-gray-400">
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-medium hover:bg-emerald-700 disabled:bg-gray-400"
+            >
               {loading ? "Verifying..." : "Verify & Login"}
             </button>
           </form>
         )
       )}
 
-      {/* ABHA LOGIN */}
+      {/* ── METHOD 2: ABHA LOGIN ── */}
       {method === "abha" && (
-        <form onSubmit={handleAbhaLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">ABHA Number</label>
-            <div className="relative">
-              <Shield className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-              <input type="text" placeholder="12-3456-7890-1234" value={abhaId}
-                onChange={(e) => setAbhaId(e.target.value)} required
-                className="w-full pl-10 p-2.5 border rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none" />
+        abhaStep === "enter_abha" ? (
+          <form onSubmit={handleVerifyAbha} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ABHA Number</label>
+              <input
+                type="text"
+                placeholder="12-3456-7890-1234"
+                value={abhaId}
+                onChange={(e) => setAbhaId(e.target.value)}
+                required
+                className="w-full p-2.5 border rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Enter your 14-digit Ayushman Bharat Health Account ID
+              </p>
             </div>
-            <p className="text-xs text-gray-400 mt-1">14-digit Ayushman Bharat Health Account number</p>
-          </div>
-          <button type="submit" disabled={loading}
-            className="w-full bg-teal-600 text-white py-2.5 rounded-lg font-medium hover:bg-teal-700 disabled:bg-gray-400">
-            {loading ? "Verifying ABHA..." : "Login with ABHA"}
-          </button>
-        </form>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-teal-600 text-white py-2.5 rounded-lg font-medium hover:bg-teal-700 disabled:bg-gray-400"
+            >
+              {loading ? "Searching ABHA..." : "Verify ABHA & Send OTP"}
+            </button>
+          </form>
+        ) : (
+          /* ABHA Found -> Enter OTP sent to linked phone */
+          <form onSubmit={handleVerifyAbhaOtp} className="space-y-4">
+            <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 text-xs text-teal-800 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-teal-600 flex-shrink-0" />
+              <span>OTP sent to linked phone: <b>{maskPhone(linkedPhone)}</b></span>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Enter 6-Digit OTP</label>
+              <input
+                type="text"
+                placeholder="123456"
+                value={abhaOtp}
+                maxLength={6}
+                onChange={(e) => setAbhaOtp(e.target.value)}
+                required
+                className="w-full p-2.5 border rounded-lg text-center text-lg tracking-widest text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-medium hover:bg-emerald-700 disabled:bg-gray-400"
+            >
+              {loading ? "Verifying..." : "Verify & Complete Login"}
+            </button>
+          </form>
+        )
       )}
 
-      {message && (
-        <p className={`text-sm ${message.includes("Error") || message.includes("Invalid") ? "text-red-500" : "text-green-600"}`}>
+      {/* ── NOT FOUND WARNING / ERROR BANNER ── */}
+      {abhaNotFound && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-xl space-y-3">
+          <div className="flex items-start gap-2 text-red-700 text-sm">
+            <ShieldAlert className="h-5 w-5 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">ABHA Record Not Found</p>
+              <p className="text-xs text-red-600 mt-0.5">
+                No patient account is linked to this ABHA ID. Please create a new account to register.
+              </p>
+            </div>
+          </div>
+          <a
+            href="/patient/setup"
+            className="flex items-center justify-center gap-2 w-full py-2 bg-red-600 hover:bg-red-700 text-white font-medium text-sm rounded-lg transition-colors"
+          >
+            Go to Sign Up Page <ArrowRight className="h-4 w-4" />
+          </a>
+        </div>
+      )}
+
+      {/* GENERAL MESSAGES */}
+      {message && !abhaNotFound && (
+        <p className={`text-sm ${message.includes("Error") || message.includes("Failed") ? "text-red-500" : "text-green-600"}`}>
           {message}
         </p>
       )}
