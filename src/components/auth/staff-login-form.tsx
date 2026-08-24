@@ -2,14 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowRight, Loader2, Lock, Stethoscope } from "lucide-react";
-
-const ROLES = [
-  { label: "Physician", email: "physician@medikiosk.in" },
-  { label: "Triage nurse", email: "triage@medikiosk.in" },
-  { label: "Superintendent", email: "admin@medikiosk.in" },
-  { label: "Vaidya (AYUSH)", email: "vaidya@medikiosk.in" },
-];
+import { Loader2, Lock } from "lucide-react";
 
 export function StaffLoginForm() {
   const router = useRouter();
@@ -25,7 +18,7 @@ export function StaffLoginForm() {
         body: JSON.stringify({ kind: "staff", ...payload }),
       });
     } catch {
-      // Demo mode never blocks entry.
+      // Login API fallback
     }
     router.replace("/physician");
     router.refresh();
@@ -36,7 +29,7 @@ export function StaffLoginForm() {
       <p className="text-[11px] uppercase tracking-[0.22em] text-[#c9842a]">Clinical console</p>
       <h1 className="serif mt-2 text-4xl">Hospital staff sign in</h1>
       <p className="mt-2 text-sm text-[#4a4338]">
-        Enter your hospital email to continue. This demonstration opens the console immediately.
+        Enter your authorized facility credentials to access the clinical console and OPD queue.
       </p>
 
       <form
@@ -55,6 +48,7 @@ export function StaffLoginForm() {
             className="w-full rounded-2xl border border-[#1b1712]/12 bg-white px-4 py-3.5 outline-none focus:border-[#0f5c61]"
           />
         </label>
+
         <button
           type="submit"
           disabled={busy}
@@ -64,39 +58,6 @@ export function StaffLoginForm() {
           Enter console
         </button>
       </form>
-
-      <button
-        type="button"
-        onClick={() => void enter({})}
-        className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-[#0f5c61]/25 px-6 py-3 text-sm font-medium text-[#0f5c61] hover:bg-[#0f5c61]/5"
-      >
-        Skip and explore the console <ArrowRight className="h-4 w-4" />
-      </button>
-
-      <div className="mt-6 rounded-[22px] border border-[#1b1712]/10 bg-[#fffdf7] p-4">
-        <p className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-[#c9842a]">
-          <Stethoscope className="h-3.5 w-3.5" /> Enter as a role
-        </p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {ROLES.map((r) => (
-            <button
-              key={r.email}
-              type="button"
-              disabled={busy}
-              onClick={() => void enter({ email: r.email })}
-              className="rounded-2xl bg-[#f6f0e4] px-3 py-2.5 text-left text-sm hover:bg-[#eee3cd] disabled:opacity-60"
-            >
-              <span className="block font-medium">{r.label}</span>
-              <span className="block text-[11px] text-[#4a4338]">Open console →</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <p className="mt-6 text-xs leading-relaxed text-[#4a4338]">
-        Demonstration environment — no passwords or OTPs are collected. A live deployment would use
-        facility-issued single sign-on with full audit logging.
-      </p>
     </div>
   );
 }
