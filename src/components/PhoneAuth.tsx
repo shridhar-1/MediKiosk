@@ -1,14 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation"; // Added router for navigation
 import { 
   RecaptchaVerifier, 
   signInWithPhoneNumber, 
-  ConfirmationResult 
+  ConfirmationResult,
+  getAuth
 } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { initializeApp, getApps, getApp } from "firebase/app";
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
 
 export default function PhoneAuth() {
+  const router = useRouter(); // Next.js Router
   const [phoneNumber, setPhoneNumber] = useState("");
   const [otp, setOtp] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
@@ -17,54 +29,51 @@ export default function PhoneAuth() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    // Initialize reCAPTCHA on component mount
+    if (typeof window === "undefined") return;
+
+    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
     if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(
-        auth,
-        "recaptcha-container",
-        {
-          size: "invisible",
-          callback: () => {
-            // reCAPTCHA solved
-          },
-        }
-      );
+      try {
+        window.recaptchaVerifier = new RecaptchaVerifier(
+          auth,
+          "recaptcha-container",
+          {
+            size: "invisible",
+            callback: () => {},
+          }
+        );
+      } catch (err) {
+        console.error("Recaptcha error:", err);
+      }
     }
   }, []);
 
-  // Step 1: Send OTP to user's phone
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setMessage("");
 
     try {
-      // Ensure phone number has country code (e.g. +91 for India)
-      const formattedPhone = phoneNumber.startsWith("+") 
-        ? phoneNumber 
-        : `+91${phoneNumber}`; // Default to India (+91) if not provided
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const formattedPhone = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber}`;
 
       const appVerifier = window.recaptchaVerifier;
       const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
       
       setConfirmationResult(confirmation);
       setIsOtpSent(true);
-      setMessage("OTP sent successfully to your phone!");
+      setMessage("OTP sent successfully!");
     } catch (error: any) {
       console.error(error);
-      setMessage(`Error: ${error.message}`);
-      // Reset reCAPTCHA on failure
-      if (window.recaptchaVerifier) {
-        window.recaptchaVerifier.render().then((widgetId: any) => {
-          window.grecaptcha?.reset(widgetId);
-        });
-      }
+      setMessage(`Error: ${error.message || "Failed to send OTP"}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // Step 2: Verify the 6-digit OTP entered by the user
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!confirmationResult) return;
@@ -74,14 +83,16 @@ export default function PhoneAuth() {
 
     try {
       const result = await confirmationResult.confirm(otp);
-      const user = result.user;
-      setMessage(`Phone number verified successfully! Welcome ${user.phoneNumber}`);
-      
-      // TODO: Here you can redirect the patient to the dashboard or call your backend DB
+      setMessage("Phone verified successfully! Redirecting...");
+
+      // REDIRECT TO THE NEXT PAGE:
+      setTimeout(() => {
+        router.push("/kiosk"); // Change "/kiosk" to "/portal" if you want a different page
+      }, 1000);
+
     } catch (error: any) {
       console.error(error);
       setMessage("Invalid OTP code. Please try again.");
-    } finally {
       setLoading(false);
     }
   };
@@ -90,7 +101,6 @@ export default function PhoneAuth() {
     <div className="p-6 max-w-md mx-auto bg-white rounded-xl shadow-md border space-y-4">
       <h2 className="text-xl font-bold text-gray-800">Phone Verification</h2>
 
-      {/* Required element for Firebase reCAPTCHA */}
       <div id="recaptcha-container"></div>
 
       {!isOtpSent ? (
@@ -99,10 +109,10 @@ export default function PhoneAuth() {
             <label className="block text-sm font-medium text-gray-700">Phone Number</label>
             <input
               type="tel"
-              placeholder="e.g. 9876543210"
+              placeholder="Enter 10-digit number"
               value={phoneNumber}
               onChange={(e) => setPhoneNumber(e.target.value)}
-              className="mt-1 block w-full p-2 border rounded-md"
+              className="mt-1 block w-full p-2 border rounded-md text-black"
               required
             />
           </div>
@@ -123,7 +133,7 @@ export default function PhoneAuth() {
               placeholder="123456"
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
-              className="mt-1 block w-full p-2 border rounded-md text-center text-lg letter-spacing"
+              className="mt-1 block w-full p-2 border rounded-md text-center text-lg text-black"
               maxLength={6}
               required
             />
@@ -147,7 +157,6 @@ export default function PhoneAuth() {
   );
 }
 
-// Global TypeScript declaration for Firebase reCAPTCHA
 declare global {
   interface Window {
     recaptchaVerifier: any;
