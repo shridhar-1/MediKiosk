@@ -25,7 +25,9 @@ import {
   Brain,
   Check,
   CircleDot,
+  Clock,
   Droplets,
+  FileText,
   Flower2,
   Gauge,
   HeartPulse,
@@ -110,6 +112,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     gender: account?.gender ?? "male",
     phone: account?.phone ?? "",
   });
+
+  // State for previous submissions
+  const [pastSubmissions, setPastSubmissions] = useState<any[]>([]);
+  const [loadingPast, setLoadingPast] = useState(false);
+
   const [granted, setGranted] = useState<Record<string, boolean>>({
     data_capture: true,
     document_scan: true,
@@ -146,6 +153,28 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       stopSpeaking();
     };
   }, []);
+
+  // Fetch previous submissions on identify step
+  useEffect(() => {
+    if (step !== "identify") return;
+    const phone = form.phone || account?.phone;
+    const abhaId = form.abhaId || account?.abhaId;
+
+    if (phone || abhaId) {
+      setLoadingPast(true);
+      let url = "/api/sessions";
+      if (phone) url += `?phone=${encodeURIComponent(phone)}`;
+      else if (abhaId) url += `?abhaId=${encodeURIComponent(abhaId)}`;
+
+      fetch(url)
+        .then((res) => res.json())
+        .then((data) => {
+          setPastSubmissions(data.sessions || []);
+        })
+        .catch((err) => console.error("Error loading past submissions:", err))
+        .finally(() => setLoadingPast(false));
+    }
+  }, [step, account, form.phone, form.abhaId]);
 
   useEffect(() => {
     if (step !== "interview" || !question) return;
@@ -341,16 +370,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     }
   }
 
-  const saveSessionForPhysician = (kioskData: any) => {
-    const patientProfile = JSON.parse(localStorage.getItem("patient_profile") || "{}");
-    const fullClinicalSession = {
-      patient: patientProfile,
-      kioskData: kioskData,
-      timestamp: new Date().toLocaleTimeString(),
-    };
-    localStorage.setItem("latest_physician_queue", JSON.stringify(fullClinicalSession));
-  };
-
   async function submit() {
     if (!sessionId) return;
     setBusy(true);
@@ -358,9 +377,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       const res = await fetch(`/api/sessions/${sessionId}/submit`, { method: "POST" });
       const data = (await res.json()) as { session: { tokenNumber: string | null } };
       setToken(data.session.tokenNumber ?? token);
-      
-      saveSessionForPhysician(summary);
-      
       setStep("complete");
     } finally {
       setBusy(false);
@@ -437,14 +453,17 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           )}
 
           {step === "identify" && (
-            <div className="rise mx-auto max-w-3xl">
-              <h1 className="serif text-4xl">{t("identifyTitle", lang)}</h1>
-              <p className="mt-3 text-[#4a4338]">{t("identifyHelp", lang)}</p>
+            <div className="rise mx-auto max-w-3xl space-y-6">
+              <div>
+                <h1 className="serif text-4xl">{t("identifyTitle", lang)}</h1>
+                <p className="mt-2 text-[#4a4338]">{t("identifyHelp", lang)}</p>
+              </div>
+
               {account && useAccount && (
-                <div className="mt-5 rounded-3xl bg-[#0f5c61] px-5 py-4 text-[#f6f0e4]">
+                <div className="rounded-3xl bg-[#0f5c61] px-6 py-5 text-[#f6f0e4]">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-[#e8d5a3]">{t("continuingAs", lang)}</p>
-                  <p className="mt-1 text-lg font-semibold">{account.fullName}</p>
-                  <p className="text-sm text-[#f6f0e4]/78">
+                  <p className="mt-1 text-2xl font-bold">{account.fullName}</p>
+                  <p className="text-sm text-[#f6f0e4]/80">
                     {account.age} {t("years", lang)} ·{" "}
                     {account.abhaId ? `ABHA ${account.abhaId}` : t("noAbha", lang)}
                   </p>
@@ -453,14 +472,71 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     onClick={() => {
                       setUseAccount(false);
                       setForm({ abhaId: "", aadhaarLast4: "", fullName: "", age: "", gender: "male", phone: "" });
+                      setPastSubmissions([]);
                     }}
-                    className="mt-3 rounded-full bg-[#e8d5a3] px-4 py-1.5 text-xs font-semibold text-[#08363a]"
+                    className="mt-3 rounded-full bg-[#e8d5a3] px-4 py-1.5 text-xs font-semibold text-[#08363a] hover:bg-white"
                   >
                     {t("someoneElse", lang)}
                   </button>
                 </div>
               )}
-              <div className={`mt-6 flex gap-2 ${account && useAccount ? "hidden" : ""}`}>
+
+              {/* ── PREVIOUS SUBMISSIONS FOR THIS PATIENT ── */}
+              {pastSubmissions.length > 0 && (
+                <div className="rounded-3xl border border-[#c9842a]/30 bg-[#f6f0e4]/50 p-5 space-y-3">
+                  <div className="flex items-center justify-between border-b border-[#1b1712]/10 pb-2">
+                    <h3 className="text-sm font-bold uppercase tracking-wider text-[#08363a] flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-[#c9842a]" /> Past Submissions ({pastSubmissions.length})
+                    </h3>
+                    <Link
+                      href="/portal"
+                      className="text-xs font-semibold text-teal-800 underline hover:text-teal-900"
+                    >
+                      View Full Portal →
+                    </Link>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                    {pastSubmissions.map((sub) => (
+                      <div
+                        key={sub.id}
+                        className="bg-white rounded-2xl p-3.5 border border-[#1b1712]/10 flex items-center justify-between text-xs md:text-sm"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[#08363a]">
+                              Token: {sub.tokenNumber || "OPD"}
+                            </span>
+                            <span className="text-[11px] bg-teal-100 text-teal-800 px-2 py-0.5 rounded font-medium">
+                              {sub.mode}
+                            </span>
+                          </div>
+                          <p className="text-[#4a4338] font-medium mt-1">
+                            {sub.summary?.chiefComplaint || sub.department || "General Consultation"}
+                          </p>
+                          <p className="text-[11px] text-gray-400 mt-0.5">
+                            {new Date(sub.startedAt).toLocaleDateString("en-IN", {
+                              day: "numeric",
+                              month: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        </div>
+
+                        <Link
+                          href={`/physician/${sub.id}`}
+                          className="inline-flex items-center gap-1 bg-[#0f5c61] text-white px-3 py-1.5 rounded-full text-xs font-medium hover:bg-[#08363a]"
+                        >
+                          <FileText className="h-3.5 w-3.5" /> Note
+                        </Link>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className={`flex gap-2 ${account && useAccount ? "hidden" : ""}`}>
                 {(["abha", "aadhaar", "new"] as const).map((tab) => (
                   <button
                     key={tab}
@@ -472,7 +548,8 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </button>
                 ))}
               </div>
-              <div className="mt-6 grid gap-4">
+
+              <div className="grid gap-4">
                 {identifyTab === "abha" && (
                   <Field
                     label={t("abha", lang)}
@@ -506,10 +583,8 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </label>
                 </div>
                 <Field label={t("phone", lang)} value={form.phone} onChange={(v) => setForm({ ...form, phone: v.replace(/\D/g, "").slice(0, 10) })} />
-                <p className="text-xs text-[#4a4338]">
-                  Demo ABHA already in the system: <button type="button" className="underline" onClick={() => setForm({ ...form, abhaId: "12-3456-7890-1234", fullName: "Ramesh Kumar", age: "58", gender: "male", phone: "9810011122" })}>12-3456-7890-1234</button>
-                </p>
               </div>
+
               <Nav
                 lang={lang}
                 onBack={() => setStep("language")}
@@ -628,32 +703,33 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
           {step === "interview" && question && (
             <div className="rise mx-auto max-w-4xl">
+              {/* --- EMERGENCY HARD LOCK --- */}
               {flags?.triggered && flags.priority === "emergency" ? (
-                <div className="mt-8 rounded-[32px] bg-[#b42318] p-8 text-center text-white shadow-2xl">
+                <div className="mt-8 rounded-[32px] bg-[#b42318] p-8 text-center text-white shadow-2xl space-y-4">
                   <ShieldAlert className="mx-auto h-20 w-20 opacity-90" />
-                  <h1 className="serif mt-6 text-4xl md:text-5xl">Medical Emergency Detected</h1>
-                  <p className="mt-4 text-lg text-white/90">
-                    Based on the symptoms you just provided, you require immediate medical attention. 
-                    Please stop this questionnaire and proceed directly to the Emergency Triage Desk.
+                  <h1 className="serif text-4xl md:text-5xl">Medical Emergency Detected</h1>
+                  <p className="text-lg text-white/90">
+                    Based on your responses, you require immediate medical attention. 
+                    Please stop this questionnaire and proceed directly to Emergency Triage Desk.
                   </p>
                   
-                  <div className="mt-6 inline-block rounded-xl bg-black/20 p-4 text-left">
-                    <p className="text-sm font-semibold uppercase tracking-wider text-white/70">Flagged Symptoms:</p>
-                    <ul className="mt-2 list-disc pl-5 text-sm text-white/90">
+                  <div className="inline-block rounded-xl bg-black/20 p-4 text-left max-w-md mx-auto">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-white/70">Flagged Symptoms:</p>
+                    <ul className="mt-1 list-disc pl-5 text-sm text-white/90">
                       {flags.reasons.map((r, idx) => (
                         <li key={idx}>{r}</li>
                       ))}
                     </ul>
                   </div>
 
-                  <div className="mt-10">
+                  <div>
                     <button
                       type="button"
                       onClick={() => {
                         stopMic();
-                        void submit(); // Submits the partial data to the doctor immediately
+                        void submit();
                       }}
-                      className="rounded-full bg-white px-8 py-4 text-lg font-bold text-[#b42318] shadow-lg transition hover:bg-gray-100"
+                      className="rounded-full bg-white px-8 py-4 text-lg font-bold text-[#b42318] shadow-lg hover:bg-gray-100 transition"
                     >
                       End Session & Alert Triage Desk
                     </button>
@@ -964,11 +1040,10 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </p>
                 )}
               </div>
-                            <div className="mt-8 flex flex-wrap justify-center gap-3">
-                <Link href={`/physician/${sessionId ?? ""}`} className="rounded-full bg-[#0f5c61] px-6 py-3 text-white font-medium">
+              <div className="mt-8 flex flex-wrap justify-center gap-3">
+                <Link href={`/physician/${sessionId ?? ""}`} className="rounded-full bg-[#0f5c61] px-6 py-3 text-white">
                   {t("openDoctorScreen", lang)}
                 </Link>
-                
                 <button
                   type="button"
                   onClick={() => {
@@ -993,24 +1068,24 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     setFlags(null);
                     setError("");
                     setPaste("");
+                    setPastSubmissions([]);
                   }}
-                  className="rounded-full bg-[#f6f0e4] px-6 py-3 font-medium text-[#4a4338]"
+                  className="rounded-full bg-[#f6f0e4] px-6 py-3"
                 >
                   {t("nextPatient", lang)}
                 </button>
 
-                {/* PATIENT DELETE SUBMISSION OPTION */}
                 {sessionId && (
                   <button
                     type="button"
                     onClick={async () => {
-                      if (confirm("Are you sure you want to delete your submitted details? This cannot be undone.")) {
+                      if (confirm("Are you sure you want to delete your submitted details?")) {
                         setBusy(true);
                         try {
                           await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
-                          alert("Your clinical history submission has been permanently deleted.");
+                          alert("Your clinical submission has been deleted.");
                           window.location.href = "/kiosk";
-                        } catch (e) {
+                        } catch {
                           alert("Failed to delete record.");
                         } finally {
                           setBusy(false);
@@ -1019,7 +1094,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     }}
                     className="rounded-full bg-[#b42318]/10 text-[#b42318] px-6 py-3 font-medium hover:bg-[#b42318] hover:text-white transition"
                   >
-                    Delete My Submission
+                    Delete Submission
                   </button>
                 )}
               </div>
@@ -1058,7 +1133,7 @@ function Field({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="h-14 w-full rounded-2xl border border-[#1b1712]/12 bg-white px-4 text-lg"
+        className="h-14 w-full rounded-2xl border border-[#1b1712]/12 bg-white px-4 text-lg text-black"
       />
     </label>
   );
