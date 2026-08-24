@@ -1,5 +1,5 @@
 import { AuthShell } from "@/components/auth/auth-shell";
-import { PatientLoginForm } from "@/components/auth/patient-login-form";
+import PhoneAuth from "@/components/PhoneAuth";
 import { seedIfEmpty } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
@@ -25,7 +25,7 @@ export default async function PatientLoginPage() {
       swapHref="/login/staff"
       swapLabel="Hospital staff? Sign in to the clinical console &rarr;"
     >
-      <PatientLoginForm />
+      <PhoneAuth />
     </AuthShell>
   );
 }
