@@ -87,7 +87,7 @@ export default function PhoneAuth() {
 
       // REDIRECT TO THE NEXT PAGE:
       setTimeout(() => {
-        router.push("/kiosk"); // Change "/kiosk" to "/portal" if you want a different page
+        router.push("/patient/setup"); // Change "/kiosk" to "/portal" if you want a different page
       }, 1000);
 
     } catch (error: any) {
