@@ -964,10 +964,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </p>
                 )}
               </div>
-              <div className="mt-8 flex justify-center gap-3">
-                <Link href={`/physician/${sessionId ?? ""}`} className="rounded-full bg-[#0f5c61] px-6 py-3 text-white">
+                            <div className="mt-8 flex flex-wrap justify-center gap-3">
+                <Link href={`/physician/${sessionId ?? ""}`} className="rounded-full bg-[#0f5c61] px-6 py-3 text-white font-medium">
                   {t("openDoctorScreen", lang)}
                 </Link>
+                
                 <button
                   type="button"
                   onClick={() => {
@@ -993,10 +994,34 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     setError("");
                     setPaste("");
                   }}
-                  className="rounded-full bg-[#f6f0e4] px-6 py-3"
+                  className="rounded-full bg-[#f6f0e4] px-6 py-3 font-medium text-[#4a4338]"
                 >
                   {t("nextPatient", lang)}
                 </button>
+
+                {/* PATIENT DELETE SUBMISSION OPTION */}
+                {sessionId && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (confirm("Are you sure you want to delete your submitted details? This cannot be undone.")) {
+                        setBusy(true);
+                        try {
+                          await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+                          alert("Your clinical history submission has been permanently deleted.");
+                          window.location.href = "/kiosk";
+                        } catch (e) {
+                          alert("Failed to delete record.");
+                        } finally {
+                          setBusy(false);
+                        }
+                      }
+                    }}
+                    className="rounded-full bg-[#b42318]/10 text-[#b42318] px-6 py-3 font-medium hover:bg-[#b42318] hover:text-white transition"
+                  >
+                    Delete My Submission
+                  </button>
+                )}
               </div>
             </div>
           )}
