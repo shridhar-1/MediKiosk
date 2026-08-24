@@ -31,11 +31,59 @@ type SummaryFields = {
   ayushAssessment?: AyushAssessment | null;
 };
 
-function asAyushAssessment(value: unknown): AyushAssessment | null {
-  if (!value || typeof value !== "object") return null;
-  // Keep only if it already looks like your schema object.
-  // (Your local generateSummaryFields already returns correct shape.)
-  return value as AyushAssessment;
+function cleanJson(text: string) {
+  return text
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+async function callGemini(prompt: string): Promise<any | null> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error("GEMINI_API_KEY missing");
+    return null;
+  }
+
+  // try modern model names in order
+  const models = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+  ];
+
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        console.error(`Gemini model failed (${model}):`, await res.text());
+        continue;
+      }
+
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) continue;
+
+      return JSON.parse(cleanJson(text));
+    } catch (err) {
+      console.error(`Gemini parse/network error (${model}):`, err);
+    }
+  }
+
+  return null;
 }
 
 async function generateWithGeminiAI(input: {
@@ -47,12 +95,9 @@ async function generateWithGeminiAI(input: {
   docsText: string;
   localFields: SummaryFields;
 }): Promise<SummaryFields | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
   const prompt = `
-You are a clinical documentation AI for Indian hospital OPDs (MediKiosk).
-Create a physician-ready structured history summary in clear medical English.
+You are an expert clinical documentation assistant for Indian hospital OPDs (MediKiosk).
+Convert raw multilingual patient intake + documents into a concise physician-ready English summary.
 
 Patient:
 - Name: ${input.patientName}
@@ -60,85 +105,57 @@ Patient:
 - Gender: ${input.gender}
 - Mode: ${input.mode}
 
-RAW INTERVIEW ANSWERS:
-${input.answersText || "No answers"}
+RAW ANSWERS:
+${input.answersText || "None"}
 
-DIGITIZED DOCUMENTS:
-${input.docsText || "No documents"}
+DOCUMENTS:
+${input.docsText || "None"}
 
-LOCAL DRAFT (for reference):
-${JSON.stringify(input.localFields, null, 2)}
+LOCAL DRAFT:
+${JSON.stringify(input.localFields)}
 
-Return ONLY valid JSON with exactly these keys:
+Return ONLY JSON with keys:
 {
-  "chiefComplaint": "string",
-  "hpi": "string",
-  "pastMedical": "string",
-  "pastSurgical": "string",
-  "drugs": "string",
-  "allergies": "string",
-  "familyHistory": "string",
-  "personalHistory": "string",
-  "reviewOfSystems": "string",
-  "investigationsSummary": "string",
-  "medicationsExtracted": "string"
+  "chiefComplaint": "",
+  "hpi": "",
+  "pastMedical": "",
+  "pastSurgical": "",
+  "drugs": "",
+  "allergies": "",
+  "familyHistory": "",
+  "personalHistory": "",
+  "reviewOfSystems": "",
+  "investigationsSummary": "",
+  "medicationsExtracted": ""
 }
 
 Rules:
-- Keep concise and clinically useful.
-- Do not invent diagnoses.
-- If missing, use "Not reported".
-- Do not include markdown.
+- Write like a doctor note (clear, clinical, short paragraphs).
+- HPI must include onset/duration/associated symptoms/progression if available.
+- Do NOT invent facts.
+- If unknown: "Not reported".
+- No markdown.
 `;
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
-          },
-        }),
-      }
-    );
+  const parsed = await callGemini(prompt);
+  if (!parsed) return null;
 
-    if (!res.ok) {
-      console.error("Gemini API error:", await res.text());
-      return null;
-    }
-
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) return null;
-
-    const parsed = JSON.parse(text) as Partial<SummaryFields>;
-
-    return {
-      chiefComplaint: parsed.chiefComplaint || input.localFields.chiefComplaint,
-      hpi: parsed.hpi || input.localFields.hpi,
-      pastMedical: parsed.pastMedical || input.localFields.pastMedical,
-      pastSurgical: parsed.pastSurgical || input.localFields.pastSurgical,
-      drugs: parsed.drugs || input.localFields.drugs,
-      allergies: parsed.allergies || input.localFields.allergies,
-      familyHistory: parsed.familyHistory || input.localFields.familyHistory,
-      personalHistory: parsed.personalHistory || input.localFields.personalHistory,
-      reviewOfSystems: parsed.reviewOfSystems || input.localFields.reviewOfSystems,
-      investigationsSummary:
-        parsed.investigationsSummary || input.localFields.investigationsSummary,
-      medicationsExtracted:
-        parsed.medicationsExtracted || input.localFields.medicationsExtracted,
-      // Keep local AYUSH object (correct schema type)
-      ayushAssessment: input.localFields.ayushAssessment ?? null,
-    };
-  } catch (err) {
-    console.error("Gemini summarization failed:", err);
-    return null;
-  }
+  return {
+    chiefComplaint: parsed.chiefComplaint || input.localFields.chiefComplaint,
+    hpi: parsed.hpi || input.localFields.hpi,
+    pastMedical: parsed.pastMedical || input.localFields.pastMedical,
+    pastSurgical: parsed.pastSurgical || input.localFields.pastSurgical,
+    drugs: parsed.drugs || input.localFields.drugs,
+    allergies: parsed.allergies || input.localFields.allergies,
+    familyHistory: parsed.familyHistory || input.localFields.familyHistory,
+    personalHistory: parsed.personalHistory || input.localFields.personalHistory,
+    reviewOfSystems: parsed.reviewOfSystems || input.localFields.reviewOfSystems,
+    investigationsSummary:
+      parsed.investigationsSummary || input.localFields.investigationsSummary,
+    medicationsExtracted:
+      parsed.medicationsExtracted || input.localFields.medicationsExtracted,
+    ayushAssessment: input.localFields.ayushAssessment ?? null,
+  };
 }
 
 export async function POST(
@@ -148,41 +165,28 @@ export async function POST(
   try {
     const { id } = await context.params;
 
-    const [session] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.id, id))
-      .limit(1);
-
-    if (!session) {
-      return Response.json({ error: "Not found" }, { status: 404 });
-    }
+    const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+    if (!session) return Response.json({ error: "Not found" }, { status: 404 });
 
     const [patient] = await db
       .select()
       .from(patients)
       .where(eq(patients.id, session.patientId))
       .limit(1);
-
-    if (!patient) {
-      return Response.json({ error: "Patient missing" }, { status: 404 });
-    }
+    if (!patient) return Response.json({ error: "Patient missing" }, { status: 404 });
 
     const answerRows = await db
       .select()
       .from(historyResponses)
       .where(eq(historyResponses.sessionId, id));
 
-    const docs = await db
-      .select()
-      .from(documents)
-      .where(eq(documents.sessionId, id));
+    const docs = await db.select().from(documents).where(eq(documents.sessionId, id));
 
     const map = answersMap(answerRows);
     const flags = evaluateRedFlags(map);
     const { investigationsSummary, medicationsExtracted } = summarizeDocuments(docs);
 
-    const localRaw = generateSummaryFields(
+    const localFields = generateSummaryFields(
       patient,
       map,
       session.mode === "ayush" ? "ayush" : "allopathic",
@@ -190,29 +194,17 @@ export async function POST(
       medicationsExtracted
     ) as SummaryFields;
 
-    const localFields: SummaryFields = {
-      ...localRaw,
-      ayushAssessment: asAyushAssessment(localRaw.ayushAssessment),
-    };
-
     const answersText = answerRows
-      .map((a) => {
-        const valuesText = Array.isArray((a as any).values)
-          ? ((a as any).values as string[]).join(", ")
-          : "";
-        return `Q: ${(a as any).questionKey || (a as any).questionText || "unknown"}
-A: ${(a as any).text || valuesText || "N/A"}`;
+      .map((a: any) => {
+        const valuesText = Array.isArray(a.values) ? a.values.join(", ") : "";
+        return `Q: ${a.questionKey || a.questionText || "unknown"}\nA: ${a.text || valuesText || "N/A"}`;
       })
       .join("\n\n");
 
     const docsText = docs
-      .map((d) => {
-        const extracted = (d as any).extractedJson
-          ? JSON.stringify((d as any).extractedJson)
-          : "";
-        return `Type: ${(d as any).docType}
-File: ${(d as any).fileName}
-Text: ${(d as any).sourceText || extracted || "N/A"}`;
+      .map((d: any) => {
+        const extracted = d.extractedJson ? JSON.stringify(d.extractedJson) : "";
+        return `Type: ${d.docType}\nFile: ${d.fileName}\nText: ${d.sourceText || extracted || "N/A"}`;
       })
       .join("\n\n");
 
@@ -281,13 +273,11 @@ Text: ${(d as any).sourceText || extracted || "N/A"}`;
       summary,
       flags,
       aiUsed: Boolean(aiFields),
+      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
     });
   } catch (error: any) {
     console.error("POST /summary failed:", error);
-    return Response.json(
-      { error: error?.message || "Failed to generate summary" },
-      { status: 500 }
-    );
+    return Response.json({ error: error?.message || "Failed to generate summary" }, { status: 500 });
   }
 }
 
@@ -310,9 +300,7 @@ export async function PATCH(
       .where(eq(clinicalSummaries.sessionId, id))
       .limit(1);
 
-    if (!existing) {
-      return Response.json({ error: "No summary" }, { status: 404 });
-    }
+    if (!existing) return Response.json({ error: "No summary" }, { status: 404 });
 
     const allowed = [
       "chiefComplaint",
@@ -372,9 +360,6 @@ export async function PATCH(
     return Response.json({ summary });
   } catch (error: any) {
     console.error("PATCH /summary failed:", error);
-    return Response.json(
-      { error: error?.message || "Failed to update summary" },
-      { status: 500 }
-    );
+    return Response.json({ error: error?.message || "Failed to update summary" }, { status: 500 });
   }
 }
