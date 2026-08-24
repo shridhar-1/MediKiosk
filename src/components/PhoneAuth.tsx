@@ -20,8 +20,8 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Demo Database of registered ABHA IDs and their linked phone numbers
-const REGISTERED_ABHA_DATABASE: Record<string, string> = {
+// Default Demo Database
+const DEFAULT_ABHA_DATABASE: Record<string, string> = {
   "12345678901234": "+919972752670",
   "12-3456-7890-1234": "+919972752670",
   "98765432109876": "+919876543210",
@@ -101,7 +101,7 @@ export default function PhoneAuth() {
     }
   };
 
-  // --- ABHA LOGIN FLOW ---
+  // --- ABHA LOGIN FLOW (SEARCHES SIGNUP DB TOO) ---
   const handleVerifyAbha = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -110,8 +110,12 @@ export default function PhoneAuth() {
 
     const cleanAbha = abhaId.replace(/-/g, "").trim();
 
-    // Check if ABHA exists in system/database
-    const foundPhone = REGISTERED_ABHA_DATABASE[cleanAbha] || REGISTERED_ABHA_DATABASE[abhaId];
+    // Read dynamic user registrations from Sign Up page
+    const customAbhaDb = JSON.parse(localStorage.getItem("registered_abha_db") || "{}");
+    const combinedDb = { ...DEFAULT_ABHA_DATABASE, ...customAbhaDb };
+
+    // Find linked phone number
+    const foundPhone = combinedDb[cleanAbha] || combinedDb[abhaId];
 
     if (!foundPhone) {
       setLoading(false);
@@ -120,19 +124,19 @@ export default function PhoneAuth() {
       return;
     }
 
-    // ABHA Found! Trigger Phone OTP to the linked phone number
+    // ABHA Found! Send OTP to linked phone
     try {
       setLinkedPhone(foundPhone);
       const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      
+
       const confirmation = await signInWithPhoneNumber(auth, foundPhone, window.recaptchaVerifier);
       setAbhaConfirmation(confirmation);
       setAbhaStep("verify_otp");
       setMessage(`ABHA verified! OTP sent to linked phone ending in ...${foundPhone.slice(-4)}`);
     } catch (error: any) {
       console.error(error);
-      setMessage(`Failed to send OTP to linked phone: ${error.message || "Error"}`);
+      setMessage(`Failed to send OTP: ${error.message || "Error"}`);
     } finally {
       setLoading(false);
     }
@@ -162,7 +166,7 @@ export default function PhoneAuth() {
     <div className="p-6 max-w-md mx-auto bg-white rounded-xl shadow-md border space-y-5">
       <h2 className="text-xl font-bold text-gray-800">Patient Login</h2>
 
-      {/* Method Tabs */}
+      {/* Tabs */}
       <div className="flex rounded-lg border border-gray-200 overflow-hidden">
         <button
           type="button"
@@ -196,7 +200,7 @@ export default function PhoneAuth() {
 
       <div id="recaptcha-container"></div>
 
-      {/* ── METHOD 1: PHONE LOGIN ── */}
+      {/* PHONE METHOD */}
       {method === "phone" && (
         !isOtpSent ? (
           <form onSubmit={handleSendOtp} className="space-y-4">
@@ -244,7 +248,7 @@ export default function PhoneAuth() {
         )
       )}
 
-      {/* ── METHOD 2: ABHA LOGIN ── */}
+      {/* ABHA METHOD */}
       {method === "abha" && (
         abhaStep === "enter_abha" ? (
           <form onSubmit={handleVerifyAbha} className="space-y-4">
@@ -272,7 +276,6 @@ export default function PhoneAuth() {
             </button>
           </form>
         ) : (
-          /* ABHA Found -> Enter OTP sent to linked phone */
           <form onSubmit={handleVerifyAbhaOtp} className="space-y-4">
             <div className="bg-teal-50 p-3 rounded-lg border border-teal-200 text-xs text-teal-800 flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-teal-600 flex-shrink-0" />
@@ -303,7 +306,7 @@ export default function PhoneAuth() {
         )
       )}
 
-      {/* ── NOT FOUND WARNING / ERROR BANNER ── */}
+      {/* ERROR BANNER */}
       {abhaNotFound && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-xl space-y-3">
           <div className="flex items-start gap-2 text-red-700 text-sm">
@@ -311,7 +314,7 @@ export default function PhoneAuth() {
             <div>
               <p className="font-semibold">ABHA Record Not Found</p>
               <p className="text-xs text-red-600 mt-0.5">
-                No patient account is linked to this ABHA ID. Please create a new account to register.
+                No account is linked to this ABHA ID. Please sign up to create your account.
               </p>
             </div>
           </div>
@@ -324,7 +327,6 @@ export default function PhoneAuth() {
         </div>
       )}
 
-      {/* GENERAL MESSAGES */}
       {message && !abhaNotFound && (
         <p className={`text-sm ${message.includes("Error") || message.includes("Failed") ? "text-red-500" : "text-green-600"}`}>
           {message}

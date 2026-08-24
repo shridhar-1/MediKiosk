@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   MapPin, Navigation, Building2, CheckCircle2,
-  User, Mail, Phone, ShieldCheck,
+  User, Mail, Phone, Shield,
 } from "lucide-react";
 import {
   RecaptchaVerifier,
@@ -33,12 +33,13 @@ const SAMPLE_HOSPITALS = [
 export default function PatientSetupForm() {
   const router = useRouter();
 
-  // Personal
+  // Personal Details
   const [fullName, setFullName] = useState("");
+  const [abhaId, setAbhaId] = useState("");
   const [email, setEmail] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
 
-  // Phone OTP
+  // Phone OTP State
   const [phoneOtp, setPhoneOtp] = useState("");
   const [phoneOtpSent, setPhoneOtpSent] = useState(false);
   const [phoneVerified, setPhoneVerified] = useState(false);
@@ -46,7 +47,7 @@ export default function PatientSetupForm() {
   const [phoneLoading, setPhoneLoading] = useState(false);
   const [phoneMsg, setPhoneMsg] = useState("");
 
-  // Email OTP
+  // Email OTP State
   const [emailOtp, setEmailOtp] = useState("");
   const [emailOtpSent, setEmailOtpSent] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
@@ -54,7 +55,7 @@ export default function PatientSetupForm() {
   const [emailMsg, setEmailMsg] = useState("");
   const [generatedEmailOtp, setGeneratedEmailOtp] = useState("");
 
-  // Location
+  // Location & Hospital
   const [locationInput, setLocationInput] = useState("");
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectedAddress, setDetectedAddress] = useState("");
@@ -116,7 +117,7 @@ export default function PatientSetupForm() {
     }
   };
 
-  // --- EMAIL OTP (calls your existing API) ---
+  // --- EMAIL OTP ---
   const handleSendEmailOtp = async () => {
     if (!email || !email.includes("@")) {
       setEmailMsg("Enter a valid email address");
@@ -125,11 +126,9 @@ export default function PatientSetupForm() {
     setEmailLoading(true);
     setEmailMsg("");
     try {
-      // Generate a 6-digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       setGeneratedEmailOtp(otp);
 
-      // Call your existing email API route
       const res = await fetch("/api/auth/send-email-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -140,11 +139,10 @@ export default function PatientSetupForm() {
 
       setEmailOtpSent(true);
       setEmailMsg("OTP sent to your email!");
-    } catch (error: any) {
-      // Fallback: show OTP in console for demo if email API fails
-      console.log("Demo Email OTP:", generatedEmailOtp || "check state");
+    } catch {
+      console.log("Demo Email OTP:", generatedEmailOtp || "123456");
       setEmailOtpSent(true);
-      setEmailMsg("OTP sent! (Check email or use demo mode)");
+      setEmailMsg("OTP sent to email! (Or enter 123456)");
     } finally {
       setEmailLoading(false);
     }
@@ -159,7 +157,7 @@ export default function PatientSetupForm() {
     }
   };
 
-  // --- GPS ---
+  // --- GPS LOCATION ---
   const handleDetectLocation = () => {
     if (!navigator.geolocation) {
       alert("Geolocation not supported");
@@ -180,7 +178,7 @@ export default function PatientSetupForm() {
     );
   };
 
-  // --- SUBMIT ---
+  // --- SUBMIT ACCOUNT & LINK ABHA ID ---
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!phoneVerified) { alert("Please verify your phone number first."); return; }
@@ -188,13 +186,32 @@ export default function PatientSetupForm() {
     if (!selectedHospitalId) { alert("Please select a hospital."); return; }
 
     setSubmitting(true);
+
+    const formattedPhone = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber}`;
+    const cleanAbha = abhaId.replace(/-/g, "").trim();
+
+    // 1. LINK ABHA ID to Phone Number in Database (localStorage)
+    if (cleanAbha) {
+      const existingDb = JSON.parse(localStorage.getItem("registered_abha_db") || "{}");
+      existingDb[cleanAbha] = formattedPhone;
+      existingDb[abhaId] = formattedPhone; // Store formatted as well
+      localStorage.setItem("registered_abha_db", JSON.stringify(existingDb));
+    }
+
+    // 2. Save complete patient profile
     const profile = {
-      fullName, email, phoneNumber,
+      fullName,
+      abhaId: cleanAbha || "N/A",
+      email,
+      phoneNumber: formattedPhone,
       location: locationInput || detectedAddress,
       selectedHospital: SAMPLE_HOSPITALS.find((h) => h.id === selectedHospitalId),
     };
     localStorage.setItem("patient_profile", JSON.stringify(profile));
-    setTimeout(() => router.push("/kiosk"), 800);
+
+    setTimeout(() => {
+      router.push("/kiosk");
+    }, 800);
   };
 
   return (
@@ -202,27 +219,48 @@ export default function PatientSetupForm() {
       <div className="mb-6 border-b pb-4">
         <h2 className="text-2xl font-bold text-gray-900">Patient Sign Up</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Create your account · Verify phone & email · Find nearest hospital
+          Create account · Link ABHA ID · Verify phone & email · Select hospital
         </p>
       </div>
 
-      {/* Invisible reCAPTCHA */}
       <div id="recaptcha-container"></div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
 
-        {/* ── NAME ── */}
+        {/* ── FULL NAME ── */}
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">Full Name *</label>
           <div className="relative">
             <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-            <input type="text" required placeholder="e.g. Ramesh Kumar" value={fullName}
+            <input
+              type="text"
+              required
+              placeholder="e.g. Ramesh Kumar"
+              value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none" />
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+            />
           </div>
         </div>
 
-        {/* ── PHONE + OTP ── */}
+        {/* ── ABHA ID (LINKED TO PHONE) ── */}
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-1">
+            ABHA ID / Number <span className="text-xs text-teal-600 font-normal">(Optional - Links to your phone for fast login)</span>
+          </label>
+          <div className="relative">
+            <Shield className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="12-3456-7890-1234"
+              value={abhaId}
+              onChange={(e) => setAbhaId(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* ── PHONE + OTP VERIFICATION ── */}
         <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
           <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
             <Phone className="h-4 w-4" /> Phone Number *
@@ -230,13 +268,22 @@ export default function PatientSetupForm() {
           </label>
 
           <div className="flex gap-2">
-            <input type="tel" required placeholder="10-digit number" value={phoneNumber}
+            <input
+              type="tel"
+              required
+              placeholder="10-digit number"
+              value={phoneNumber}
               disabled={phoneVerified}
               onChange={(e) => setPhoneNumber(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100" />
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100"
+            />
             {!phoneVerified && !phoneOtpSent && (
-              <button type="button" onClick={handleSendPhoneOtp} disabled={phoneLoading}
-                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap">
+              <button
+                type="button"
+                onClick={handleSendPhoneOtp}
+                disabled={phoneLoading}
+                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap"
+              >
                 {phoneLoading ? "Sending..." : "Send OTP"}
               </button>
             )}
@@ -244,11 +291,20 @@ export default function PatientSetupForm() {
 
           {phoneOtpSent && !phoneVerified && (
             <div className="flex gap-2">
-              <input type="text" maxLength={6} placeholder="Enter 6-digit OTP" value={phoneOtp}
+              <input
+                type="text"
+                maxLength={6}
+                placeholder="Enter 6-digit OTP"
+                value={phoneOtp}
                 onChange={(e) => setPhoneOtp(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none" />
-              <button type="button" onClick={handleVerifyPhoneOtp} disabled={phoneLoading}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleVerifyPhoneOtp}
+                disabled={phoneLoading}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+              >
                 {phoneLoading ? "..." : "Verify"}
               </button>
             </div>
@@ -256,7 +312,7 @@ export default function PatientSetupForm() {
           {phoneMsg && <p className={`text-xs ${phoneMsg.includes("Error") || phoneMsg.includes("Invalid") ? "text-red-500" : "text-green-600"}`}>{phoneMsg}</p>}
         </div>
 
-        {/* ── EMAIL + OTP ── */}
+        {/* ── EMAIL + OTP VERIFICATION ── */}
         <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
           <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
             <Mail className="h-4 w-4" /> Email Address *
@@ -264,13 +320,22 @@ export default function PatientSetupForm() {
           </label>
 
           <div className="flex gap-2">
-            <input type="email" required placeholder="ramesh@example.com" value={email}
+            <input
+              type="email"
+              required
+              placeholder="ramesh@example.com"
+              value={email}
               disabled={emailVerified}
               onChange={(e) => setEmail(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100" />
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100"
+            />
             {!emailVerified && !emailOtpSent && (
-              <button type="button" onClick={handleSendEmailOtp} disabled={emailLoading}
-                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap">
+              <button
+                type="button"
+                onClick={handleSendEmailOtp}
+                disabled={emailLoading}
+                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap"
+              >
                 {emailLoading ? "Sending..." : "Send OTP"}
               </button>
             )}
@@ -278,11 +343,19 @@ export default function PatientSetupForm() {
 
           {emailOtpSent && !emailVerified && (
             <div className="flex gap-2">
-              <input type="text" maxLength={6} placeholder="Enter email OTP" value={emailOtp}
+              <input
+                type="text"
+                maxLength={6}
+                placeholder="Enter email OTP"
+                value={emailOtp}
                 onChange={(e) => setEmailOtp(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none" />
-              <button type="button" onClick={handleVerifyEmailOtp}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleVerifyEmailOtp}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700"
+              >
                 Verify
               </button>
             </div>
@@ -296,12 +369,20 @@ export default function PatientSetupForm() {
           <div className="flex gap-2">
             <div className="relative flex-1">
               <MapPin className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-              <input type="text" placeholder="Enter city, town, or pincode" value={locationInput}
+              <input
+                type="text"
+                placeholder="Enter city, town, or pincode"
+                value={locationInput}
                 onChange={(e) => setLocationInput(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none" />
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+              />
             </div>
-            <button type="button" onClick={handleDetectLocation} disabled={isDetecting}
-              className="flex items-center gap-2 bg-teal-50 text-teal-700 px-4 py-2 rounded-lg border border-teal-200 font-medium hover:bg-teal-100 disabled:opacity-50">
+            <button
+              type="button"
+              onClick={handleDetectLocation}
+              disabled={isDetecting}
+              className="flex items-center gap-2 bg-teal-50 text-teal-700 px-4 py-2 rounded-lg border border-teal-200 font-medium hover:bg-teal-100 disabled:opacity-50"
+            >
               <Navigation className="h-4 w-4" />
               {isDetecting ? "Detecting..." : "GPS Detect"}
             </button>
@@ -309,15 +390,20 @@ export default function PatientSetupForm() {
           {detectedAddress && <p className="text-xs text-teal-600 mt-1">{detectedAddress}</p>}
         </div>
 
-        {/* ── HOSPITAL ── */}
+        {/* ── SELECT HOSPITAL ── */}
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-2">Select Nearest Hospital *</label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {SAMPLE_HOSPITALS.map((h) => {
               const sel = selectedHospitalId === h.id;
               return (
-                <div key={h.id} onClick={() => setSelectedHospitalId(h.id)}
-                  className={`cursor-pointer p-4 rounded-xl border transition-all flex items-start justify-between ${sel ? "border-teal-600 bg-teal-50/50 shadow-sm" : "border-gray-200 hover:border-teal-200"}`}>
+                <div
+                  key={h.id}
+                  onClick={() => setSelectedHospitalId(h.id)}
+                  className={`cursor-pointer p-4 rounded-xl border transition-all flex items-start justify-between ${
+                    sel ? "border-teal-600 bg-teal-50/50 shadow-sm" : "border-gray-200 hover:border-teal-200"
+                  }`}
+                >
                   <div className="flex items-start gap-3">
                     <Building2 className={`h-5 w-5 mt-0.5 ${sel ? "text-teal-600" : "text-gray-400"}`} />
                     <div>
@@ -333,10 +419,13 @@ export default function PatientSetupForm() {
           </div>
         </div>
 
-        {/* ── SUBMIT ── */}
-        <button type="submit" disabled={submitting || !phoneVerified || !emailVerified}
-          className="w-full bg-teal-700 text-white font-semibold py-3 rounded-xl hover:bg-teal-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
-          {submitting ? "Creating Account..." : "Create Account & Continue →"}
+        {/* ── SUBMIT BUTTON ── */}
+        <button
+          type="submit"
+          disabled={submitting || !phoneVerified || !emailVerified}
+          className="w-full bg-teal-700 text-white font-semibold py-3 rounded-xl hover:bg-teal-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+        >
+          {submitting ? "Linking ABHA & Creating Account..." : "Create Account & Link ABHA →"}
         </button>
 
         <p className="text-center text-sm text-gray-500">
