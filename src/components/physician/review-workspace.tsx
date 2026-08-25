@@ -69,7 +69,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
 
   async function generateSummary() {
     setGenBusy(true);
-    setGenStatus({ message: "Summarising the interview… (AI or local fallback)", kind: "info" });
+    setGenStatus({ message: "Summarising the interview... (AI or local fallback)", kind: "info" });
     try {
       const res = await fetch(`/api/sessions/${session.id}/summary`, { method: "POST" });
       const data = await res.json();
@@ -89,7 +89,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
         setGenStatus({
           message: `AI was attempted but returned nothing${
             data.aiError ? ` (${data.aiError})` : ""
-          } — used the built-in local generator instead.`,
+          } - used the built-in local generator instead.`,
           kind: "info",
         });
       }
@@ -132,11 +132,11 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-[#c9842a]">
-              {dept} · {session.mode}
+              {dept} / {session.mode}
             </p>
             <h1 className="serif mt-1 text-4xl">{patient.fullName}</h1>
             <p className="mt-2 text-sm text-[#4a4338]">
-              {patient.age} years · {patient.gender} · {patient.phone ?? "no phone"} ·{" "}
+              {patient.age} years / {patient.gender} / {patient.phone ?? "no phone"} /{" "}
               {patient.abhaId ? `ABHA ${patient.abhaId}` : "ABHA not linked"}
             </p>
           </div>
@@ -158,14 +158,13 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
           </aside>
         )}
 
-        {/* GENERATE SUMMARY — shown whenever there is no summary yet */}
         {!summary && (
           <div className="mt-8 space-y-4">
             <div className="rounded-[28px] bg-[#fffdf7] p-6 ring-1 ring-[#1b1712]/8">
               <p className="text-xs uppercase tracking-[0.16em] text-[#c9842a]">AI summary</p>
               <h2 className="serif mt-1 text-2xl">Generate clinical summary</h2>
               <p className="mt-2 text-sm text-[#4a4338]">
-                This session has no summary yet. Generate one now — it will draft the structured notes from the
+                This session has no summary yet. Generate one now - it will draft the structured notes from the
                 interview (and documents). You can edit everything before confirming to HIS / ABHA.
               </p>
               <button
@@ -177,7 +176,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 {genBusy ? (
                   <>
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    Generating…
+                    Generating...
                   </>
                 ) : (
                   "Generate summary"
@@ -210,7 +209,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                       {a.questionText || a.questionKey}
                     </p>
                     <p className="mt-0.5 text-sm text-[#1b1712]">
-                      {a.answerText || (a.answerJson as { values?: string[] })?.values?.join(", ") || "—"}
+                      {a.answerText || (a.answerJson as { values?: string[] })?.values?.join(", ") || "-"}
                     </p>
                   </div>
                 ))}
@@ -221,9 +220,18 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
 
         {summary && (
           <div className="mt-8 space-y-5">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-xs uppercase tracking-[0.16em] text-[#c9842a]">
-                Summary &nbsp;·&nbsp; <span className="text-[#4a4338]">{summary.status}</span>
+                Summary / <span className="text-[#4a4338]">{summary.status}</span>
+                {summary.engine && (
+                  <span
+                    className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      summary.aiUsed ? "bg-[#1f6b45]/10 text-[#1f6b45]" : "bg-[#f6f0e4] text-[#8a5a18]"
+                    }`}
+                  >
+                    {summary.aiUsed ? `AI / ${summary.engine}` : "Template fallback"}
+                  </span>
+                )}
               </p>
               <button
                 type="button"
@@ -231,7 +239,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 onClick={() => void generateSummary()}
                 className="inline-flex items-center gap-2 rounded-full bg-[#f6f0e4] px-4 py-2 text-xs font-medium text-[#08363a] transition hover:bg-[#efe4cf] disabled:opacity-50"
               >
-                {genBusy ? "Regenerating…" : "Regenerate summary"}
+                {genBusy ? "Regenerating..." : "Regenerate summary"}
               </button>
             </div>
 
@@ -270,7 +278,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 onChange={(e) => setNotes(e.target.value)}
                 rows={4}
                 className="mt-1.5 w-full rounded-2xl border border-[#1b1712]/10 bg-[#fffdf7] px-4 py-3"
-                placeholder="Plan, differentials, orders…"
+                placeholder="Plan, differentials, orders..."
               />
             </label>
 
@@ -331,7 +339,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                   {l.name}{" "}
                   <span className="text-[#b42318]">
                     {l.value}
-                    {l.flag === "high" ? " ↑" : " ↓"}
+                    {l.flag === "high" ? " up" : " down"}
                   </span>
                 </span>
                 <span className="text-xs text-[#4a4338]">{l.when}</span>
@@ -350,7 +358,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 <p className="text-sm font-medium">{d.fileName}</p>
                 <p className="text-xs text-[#4a4338]">{d.facilityName}</p>
                 {d.extractedJson?.diagnoses?.length ? (
-                  <p className="mt-1 text-xs">{d.extractedJson.diagnoses.join(" · ")}</p>
+                  <p className="mt-1 text-xs">{d.extractedJson.diagnoses.join(" | ")}</p>
                 ) : null}
               </li>
             ))}
@@ -367,7 +375,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 <p className="text-[#f6f0e4]/70">{new Date(e.createdAt).toLocaleString("en-IN")}</p>
               </li>
             ))}
-            {events.length === 0 && <li>Nothing pushed yet — confirm to file.</li>}
+            {events.length === 0 && <li>Nothing pushed yet - confirm to file.</li>}
           </ul>
         </section>
       </aside>

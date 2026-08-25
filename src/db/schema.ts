@@ -129,6 +129,8 @@ export const clinicalSummaries = pgTable("clinical_summaries", {
   medicationsExtracted: text("medications_extracted"),
   physicianEdits: jsonb("physician_edits").$type<Record<string, string> | null>(),
   status: text("status").notNull().default("draft"),
+  engine: text("engine"),
+  aiUsed: boolean("ai_used").notNull().default(false),
   generatedAt: timestamp("generated_at", { mode: "date" }).defaultNow().notNull(),
   confirmedAt: timestamp("confirmed_at", { mode: "date" }),
 });
