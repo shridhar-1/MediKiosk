@@ -1,12 +1,13 @@
 import { KioskApp } from "@/components/kiosk/kiosk-app";
-import { patientOrDemo } from "@/lib/auth";
+import { currentPatient } from "@/lib/auth";
 import { seedIfEmpty } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
 
 export default async function KioskPage() {
   await seedIfEmpty();
-  const patient = await patientOrDemo();
+  // FIXED: Use currentPatient() not patientOrDemo() to prevent Priya Nair default
+  const patient = await currentPatient();
 
   return (
     <KioskApp

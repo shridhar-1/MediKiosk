@@ -88,14 +88,14 @@ export async function currentStaff(): Promise<Staff | null> {
 }
 
 /**
- * Demo mode: sections are open. If nobody is "signed in", fall back to a
- * seeded identity so the visitor can explore without a credential wall.
+ * FIXED: Demo mode fallback was returning Priya Nair (oldest patient) when nobody signed in.
+ * Old code: orderBy(asc) -> Priya Nair (8 hours ago) was first.
+ * New code: Return null if not signed in, so form is empty and user must login/signup.
  */
 export async function patientOrDemo(): Promise<Patient | null> {
   const signedIn = await currentPatient();
   if (signedIn) return signedIn;
-  const [fallback] = await db.select().from(patients).orderBy(asc(patients.createdAt)).limit(1);
-  return fallback ?? null;
+  return null;
 }
 
 export async function staffOrDemo(): Promise<Staff | null> {

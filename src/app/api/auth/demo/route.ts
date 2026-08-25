@@ -3,7 +3,7 @@ import { patients, staff } from "@/db/schema";
 import { createAuthSession, hashSecret, normalizeEmail } from "@/lib/auth";
 import { formatAbha, nid } from "@/lib/ids";
 import { seedIfEmpty } from "@/lib/seed";
-import { asc, eq, or } from "drizzle-orm";
+import { asc, desc, eq, or } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +19,6 @@ type Body = {
   email?: string;
 };
 
-/**
- * Open-access demo entry. No credentials are checked — whatever the visitor
- * types is used to personalise the session, and blanks fall back to a
- * seeded demo identity so the door never blocks anyone.
- */
 export async function POST(request: Request) {
   await seedIfEmpty();
 
@@ -107,7 +102,12 @@ export async function POST(request: Request) {
   }
 
   if (!patient) {
-    [patient] = await db.select().from(patients).orderBy(asc(patients.createdAt)).limit(1);
+    // FIXED: asc = Priya (oldest). Now desc = most recent
+    [patient] = await db.select().from(patients).orderBy(desc(patients.createdAt)).limit(1);
+  }
+
+  if (!patient) {
+    return Response.json({ error: "No patients found, please register" }, { status: 404 });
   }
 
   await createAuthSession("patient", patient.id);
