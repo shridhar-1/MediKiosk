@@ -161,9 +161,9 @@ function QueueRow({
         )}
       </div>
       <div className="flex items-center gap-3 self-center">
-  <span className="text-sm text-[#0f5c61]">{accent === "done" ? "Open note" : "Review draft →"}</span>
-  <DeleteSessionButton sessionId={row.session.id} label="" />
-</div>
+        <span className="text-sm text-[#0f5c61]">{accent === "done" ? "Open note" : "Review draft →"}</span>
+        <DeleteSessionButton sessionId={row.session.id} label="" />
+      </div>
     </Link>
   );
 }

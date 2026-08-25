@@ -5,10 +5,10 @@ import { db } from "@/db";
 import { clinicalSummaries, patients, sessions } from "@/db/schema";
 import { PhysicianNav } from "@/components/physician/nav";
 import { DeleteSessionButton } from "@/components/physician/delete-session-button";
+import { DeletePatientButton } from "@/components/physician/delete-patient-button";
 import { seedIfEmpty } from "@/lib/seed";
 import { DEPARTMENTS } from "@/lib/types";
 import { desc, eq } from "drizzle-orm";
-import { DeletePatientButton } from "@/components/physician/delete-patient-button";
 
 export const dynamic = "force-dynamic";
 

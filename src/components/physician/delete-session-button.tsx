@@ -4,6 +4,10 @@ import { Loader2, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+/**
+ * Permanently deletes a submission. Used by hospital staff on the queue and
+ * records screens. State is kept in the parent so the list can be refreshed.
+ */
 export function DeleteSessionButton({
   sessionId,
   label = "Delete",
@@ -28,8 +32,11 @@ export function DeleteSessionButton({
     try {
       const res = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
       if (res.ok) {
-        if (onDeleted) onDeleted();
-        else router.refresh();
+        if (onDeleted) {
+          onDeleted();
+        } else {
+          router.refresh();
+        }
       } else {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Failed to delete");

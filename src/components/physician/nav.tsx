@@ -20,8 +20,8 @@ export function PhysicianNav({ member }: { member: Staff }) {
           Queue
         </Link>
         <Link href="/physician/records" className="text-[#4a4338] hover:text-[#08363a]">
-  Records
-</Link>
+          Records
+        </Link>
         <span className="hidden text-right sm:block">
           <span className="block font-medium text-[#1b1712]">{member.fullName}</span>
           <span className="block text-[11px] text-[#4a4338]">

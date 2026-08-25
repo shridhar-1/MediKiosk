@@ -14,6 +14,14 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   return Response.json(bundle);
 }
 
+/**
+ * DELETE /api/sessions/:id — permanently remove a submission.
+ *
+ * Authorization (real, signed-in session):
+ *  - A patient can only delete one of their OWN sessions.
+ *  - Any hospital staff (physician / triage / admin) can delete any session.
+ *  - Public/demo requests are rejected.
+ */
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;

@@ -4,6 +4,7 @@ import { Loader2, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+/** Admin-only: permanently delete a patient and all their sessions. */
 export function DeletePatientButton({ patientId, name }: { patientId: string; name?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
