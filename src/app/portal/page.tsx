@@ -55,22 +55,22 @@ export default function PatientPortalPage() {
   };
 
   const handleDeleteSubmission = async (sessionId: string) => {
-  if (!confirm("Are you sure you want to delete this submission record? This cannot be undone.")) return;
+    if (!confirm("Are you sure you want to delete this submission record? This cannot be undone.")) return;
 
-  try {
-    const res = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-      setSubmissions((prev) => prev.filter((s) => s.id !== sessionId));
-      alert("Submission deleted successfully.");
-    } else {
-      // 401/403 surface the real reason (e.g. not signed in, not your record)
-      alert(data.error || "Failed to delete submission.");
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSubmissions((prev) => prev.filter((s) => s.id !== sessionId));
+        alert("Submission deleted successfully.");
+      } else {
+        // 401/403 surface the real reason (e.g. not signed in, not your record)
+        alert(data.error || "Failed to delete submission.");
+      }
+    } catch (e) {
+      alert("Error deleting record.");
     }
-  } catch (e) {
-    alert("Error deleting record.");
-  }
-};
+  };
 
   if (!patientProfile) {
     return <div className="min-h-screen bg-[#fffdf7] flex items-center justify-center">Loading portal...</div>;
@@ -234,13 +234,8 @@ export default function PatientPortalPage() {
                         <p className="text-gray-500 italic">No summary details available for this session.</p>
                       )}
 
-                      <div className="pt-2 border-t flex justify-end">
-                        <Link
-                          href={`/physician/${item.id}`}
-                          className="text-xs font-semibold text-teal-800 underline hover:text-teal-900"
-                        >
-                          View Doctor Consultation Screen →
-                        </Link>
+                      <div className="pt-2 border-t text-xs text-[#4a4338]">
+                        Opened by the treating physician on the hospital console. You can review or delete this submission here.
                       </div>
                     </div>
                   )}
