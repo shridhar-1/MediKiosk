@@ -40,7 +40,7 @@ export type AIInput = {
 };
 
 /* ------------------------------------------------------------------ */
-/* Prompt                                                              */
+/* Prompt                                                             */
 /* ------------------------------------------------------------------ */
 
 function buildPrompt(input: AIInput): string {
@@ -79,7 +79,7 @@ Do NOT include markdown formatting or explanations outside JSON.
 }
 
 /* ------------------------------------------------------------------ */
-/* JSON extraction                                                     */
+/* JSON extraction                                                    */
 /* ------------------------------------------------------------------ */
 
 function extractJsonFromText(text: string): any | null {
@@ -128,7 +128,7 @@ function parseFields(text: string, input: AIInput): SummaryFields | null {
 }
 
 /* ------------------------------------------------------------------ */
-/* Ollama (local) engine                                               */
+/* Ollama (local) engine                                              */
 /* ------------------------------------------------------------------ */
 
 async function generateWithOllama(
@@ -173,7 +173,7 @@ async function generateWithOllama(
 }
 
 /* ------------------------------------------------------------------ */
-/* Gemini engine                                                       */
+/* Gemini engine                                                      */
 /* ------------------------------------------------------------------ */
 
 async function generateWithGeminiAI(
@@ -224,8 +224,16 @@ async function generateWithGeminiAI(
 }
 
 /* ------------------------------------------------------------------ */
-/* Groq (cloud, free tier) engine                                      */
+/* Groq (cloud, free tier) engine                                     */
 /* ------------------------------------------------------------------ */
+
+const GROQ_VALID_MODELS = [
+  "openai/gpt-oss-120b", // official replacement per Groq docs
+  "openai/gpt-oss-20b",
+  "qwen/qwen3-32b",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "moonshotai/kimi-k2-instruct"
+];
 
 async function generateWithGroq(
   input: AIInput,
@@ -235,7 +243,9 @@ async function generateWithGroq(
     return { fields: null, error: "GROQ_API_KEY is missing in environment variables", engine: "groq" };
   }
 
-  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  const configuredModel = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+  // Ensure the configured model is tried first, then loop through the rest uniquely
+  const modelsToTry = Array.from(new Set([configuredModel, ...GROQ_VALID_MODELS]));
 
   const messages = [
     {
@@ -246,45 +256,61 @@ async function generateWithGroq(
     { role: "user", content: buildPrompt(input) },
   ];
 
-  try {
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      signal: AbortSignal.timeout(90_000),
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.2,
-        max_tokens: 1800,
-        response_format: { type: "json_object" },
-      }),
-    });
+  let lastError = "";
 
-    if (!response.ok) {
-      return {
-        fields: null,
-        engine: "groq",
-        error: `Groq (${model}) HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`,
-      };
+  for (const model of modelsToTry) {
+    try {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        signal: AbortSignal.timeout(90_000),
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: 0.2,
+          max_tokens: 1800,
+          response_format: { type: "json_object" },
+        }),
+      });
+
+      if (!response.ok) {
+        lastError = `Groq (${model}) HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`;
+        console.error(lastError);
+        // Continue to the next model in the array on 404 or other errors
+        continue;
+      }
+
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content || "";
+      const parsedFields = parseFields(text, input);
+
+      if (parsedFields) {
+        return { fields: parsedFields, engine: "groq" };
+      }
+      
+      lastError = `Groq (${model}) failed to parse valid JSON fields`;
+    } catch (e: any) {
+      lastError = `Groq request failed for ${model}: ${e?.message || e}`;
+      console.error(lastError);
+      // Continue loop if there's a fetch or parsing exception
     }
-
-    const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content || "";
-    return { fields: parseFields(text, input), engine: "groq" };
-  } catch (e: any) {
-    return {
-      fields: null,
-      engine: "groq",
-      error: `Groq request failed: ${e?.message || e}`,
-    };
   }
+
+  // If the loop finishes without returning, all Groq models failed.
+  // Returning null fields here tells the parent function (generateWithAI) 
+  // to fall back to the next engine in the queue (Gemini).
+  return {
+    fields: null,
+    engine: "groq",
+    error: lastError || "All Groq models failed",
+  };
 }
 
 /* ------------------------------------------------------------------ */
-/* Engine selection                                                    */
+/* Engine selection                                                   */
 /* ------------------------------------------------------------------ */
 
 // AI_ENGINE: "auto" (default) | "ollama" | "groq" | "gemini"
@@ -326,7 +352,7 @@ async function generateWithAI(input: AIInput): Promise<{
 }
 
 /* ------------------------------------------------------------------ */
-/* High-level: generate (or regenerate) a summary for a session        */
+/* High-level: generate (or regenerate) a summary for a session       */
 /* ------------------------------------------------------------------ */
 
 export async function generateSummaryForSession(sessionId: string): Promise<{
