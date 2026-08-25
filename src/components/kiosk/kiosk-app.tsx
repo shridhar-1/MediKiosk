@@ -12,6 +12,7 @@ import {
   YES_NO_OPTIONS,
 } from "@/lib/interview";
 import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
+import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
@@ -144,6 +145,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [docs, setDocs] = useState<DocRow[]>([]);
   const [paste, setPaste] = useState("");
   const [docType, setDocType] = useState("lab");
+  const [uploading, setUploading] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [flags, setFlags] = useState<{ triggered: boolean; priority: string; reasons: string[] } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -366,6 +372,93 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setBusy(false);
   }
 
+  async function performOCRAndUpload(file: File) {
+    if (!sessionId) return;
+    if (!isValidDocumentFile(file)) {
+      setError("Invalid file type. Please upload JPG, PNG, PDF or TXT");
+      return;
+    }
+    setUploading(true);
+    setOcrProgress(0);
+    setError("");
+    try {
+      let sourceText = "";
+      let fileName = file.name;
+      if (file.type.startsWith("image/") || file.type === "application/pdf") {
+        const ocrResult = await performOCR(file, (progress) => {
+          setOcrProgress(progress);
+        });
+        sourceText = ocrResult.text;
+        if (!sourceText.trim()) {
+          throw new Error("OCR could not extract text from image. Try a clearer photo.");
+        }
+      } else {
+        sourceText = await file.text();
+      }
+      const res = await fetch(`/api/sessions/${sessionId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          docType,
+          fileName,
+          mimeType: file.type,
+          sourceText,
+        }),
+      });
+      const data = (await res.json()) as { document: DocRow };
+      setDocs((d) => [...d, data.document]);
+      setOcrProgress(100);
+    } catch (e: any) {
+      setError(e.message || "Failed to process document");
+      console.error("OCR upload failed:", e);
+    } finally {
+      setUploading(false);
+      setTimeout(() => setOcrProgress(0), 2000);
+    }
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) void performOCRAndUpload(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void performOCRAndUpload(file);
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+  }
+
+  function clearSessionSecurely() {
+    setAnswers({});
+    setDocs([]);
+    setSummary(null);
+    setPaste("");
+    setDraftText("");
+    setDraftValues([]);
+    setHeard("");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("kiosk_temp_session");
+      localStorage.removeItem("patient_profile_temp");
+      sessionStorage.clear();
+      console.log("[Privacy] Session data cleared per DPDP Act 2023 - temporary data removed");
+    }
+    stopMic();
+    stopSpeaking();
+  }
+
   async function buildSummary() {
     if (!sessionId) return;
     setBusy(true);
@@ -391,6 +484,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       const data = (await res.json()) as { session: { tokenNumber: string | null } };
       setToken(data.session.tokenNumber ?? token);
       setStep("complete");
+      setTimeout(() => {
+        console.log("[Privacy] Kiosk session completed, clearing temp voice/docs cache");
+        if (typeof window !== "undefined") {
+          sessionStorage.removeItem("kiosk_voice_cache");
+        }
+      }, 2000);
     } finally {
       setBusy(false);
     }
@@ -920,22 +1019,80 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
             <div className="rise mx-auto max-w-4xl">
               <h1 className="serif text-4xl">{t("documentsTitle", lang)}</h1>
               <p className="mt-3 text-[#4a4338]">{t("documentsHelp", lang)}</p>
-              <div className="mt-6 grid gap-3 md:grid-cols-2">
-                {SAMPLE_DOCUMENTS.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => void addSample(s.id)}
-                    className="rounded-3xl border border-[#1b1712]/10 bg-white p-5 text-left hover:border-[#0f5c61]/40"
-                  >
-                    <span className="text-xs uppercase tracking-wider text-[#c9842a]">{s.docType}</span>
-                    <span className="mt-1 block font-semibold">{s.fileName}</span>
-                    <span className="mt-1 block text-sm text-[#4a4338]">{s.facilityName}</span>
-                  </button>
-                ))}
+              
+              <div className="mt-6 grid gap-4">
+                <div
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  className={`rounded-[28px] border-2 border-dashed p-8 text-center transition ${
+                    isDragging ? "border-[#0f5c61] bg-[#0f5c61]/5" : "border-[#1b1712]/20 bg-white"
+                  }`}
+                >
+                  <div className="mx-auto max-w-md">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[#f6f0e4]">
+                      <ScanLine className="h-8 w-8 text-[#0f5c61]" />
+                    </div>
+                    <h3 className="mt-4 font-semibold">Upload Medical Documents - Real OCR</h3>
+                    <p className="mt-1 text-sm text-[#4a4338]">Drag & drop or click to upload - JPG, PNG, PDF with Tesseract.js OCR (eng+hin+tam+tel+ben+mar+kan) + Bhashini future</p>
+                    
+                    <div className="mt-4 flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="rounded-full bg-[#0f5c61] px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                      >
+                        {uploading ? `Scanning... ${ocrProgress}%` : "Choose File"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => cameraInputRef.current?.click()}
+                        disabled={uploading}
+                        className="rounded-full bg-[#f6f0e4] px-5 py-2.5 text-sm font-medium disabled:opacity-50"
+                      >
+                        📷 Camera Scan
+                      </button>
+                    </div>
+
+                    {uploading && (
+                      <div className="mt-4">
+                        <div className="h-2 w-full rounded-full bg-[#e8dfd0]">
+                          <div className="h-2 rounded-full bg-[#0f5c61] transition-all" style={{ width: `${ocrProgress}%` }} />
+                        </div>
+                        <p className="mt-1 text-xs text-[#4a4338]">OCR: {ocrProgress}% - Tesseract.js (multilingual) - Bhashini roadmap for handwritten Hindi</p>
+                      </div>
+                    )}
+
+                    <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt" className="hidden" onChange={handleFileChange} />
+                    <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
+                    
+                    <p className="mt-3 text-[11px] text-[#4a4338]/70">Secure: Images processed client-side, only extracted text sent to server per DPDP Act 2023</p>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-[#c9842a]">Or try sample documents (AIIMS, Safdarjung, KEM, AIIA) - Demo</p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {SAMPLE_DOCUMENTS.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => void addSample(s.id)}
+                        className="rounded-3xl border border-[#1b1712]/10 bg-white p-5 text-left hover:border-[#0f5c61]/40"
+                      >
+                        <span className="text-xs uppercase tracking-wider text-[#c9842a]">{s.docType}</span>
+                        <span className="mt-1 block font-semibold">{s.fileName}</span>
+                        <span className="mt-1 block text-sm text-[#4a4338]">{s.facilityName}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
+
               <div className="mt-6 rounded-3xl border border-dashed border-[#1b1712]/20 p-5">
-                <div className="flex flex-wrap gap-2">
+                <p className="text-sm font-medium">Manual Text Entry (Fallback for low-literacy)</p>
+                <div className="mt-3 flex flex-wrap gap-2">
                   {["prescription", "lab", "discharge", "imaging", "other"].map((ty) => (
                     <button
                       key={ty}
@@ -1093,7 +1250,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   }}
                   className="rounded-full bg-[#f6f0e4] px-6 py-3"
                 >
-                  {t("nextPatient", lang)}
+                  {t("nextPatient", lang)} (Secure Clear)
                 </button>
               </div>
             </div>
