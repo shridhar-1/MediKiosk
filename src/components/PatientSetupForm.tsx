@@ -1,10 +1,27 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+/**
+ * ============================================================================
+ * STREAMLINED PATIENT ONBOARDING (mentor feedback: fewer questions)
+ * ============================================================================
+ * Before: 6 question blocks + 2 OTP verifications (phone AND email) + manual
+ *         hospital selection = ~40–60 s of kiosk occupancy.
+ * After:  Step 1 — name + phone (2 fields). Step 2 — one OTP.
+ *         Everything else is auto-selected or deferred (progressive profile).
+ *
+ *  • Hospital: auto-selected (nearest) — one line, tap to change.
+ *  • Location: GPS auto-detected silently, best effort.
+ *  • ABHA / email: optional, collapsed, NEVER blocking.
+ *  • OTP: Firebase phone auth when configured; automatic demo-OTP fallback
+ *         when it isn't (so the kiosk always works in demos/offline).
+ * ============================================================================
+ */
+
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  MapPin, Navigation, Building2, CheckCircle2,
-  User, Mail, Phone, Shield,
+  MapPin, Building2, CheckCircle2, User, Phone, Shield,
+  ChevronDown, ChevronUp, Loader2, PartyPopper,
 } from "lucide-react";
 import {
   RecaptchaVerifier,
@@ -33,406 +50,315 @@ const SAMPLE_HOSPITALS = [
 export default function PatientSetupForm() {
   const router = useRouter();
 
-  // Personal Details
+  // ── The only 3 required inputs ──
   const [fullName, setFullName] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [otp, setOtp] = useState("");
+
+  // ── OTP state ──
+  const [step, setStep] = useState<1 | 2>(1);
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [demoOtp, setDemoOtp] = useState<string | null>(null); // fallback when Firebase is not configured
+  const [loading, setLoading] = useState(false);
+  const [verified, setVerified] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  // ── Auto / optional (never blocking) ──
+  const [selectedHospitalId, setSelectedHospitalId] = useState<number>(SAMPLE_HOSPITALS[0].id); // auto: nearest
+  const [showHospitalPicker, setShowHospitalPicker] = useState(false);
+  const [showOptional, setShowOptional] = useState(false);
   const [abhaId, setAbhaId] = useState("");
   const [email, setEmail] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [detectedArea, setDetectedArea] = useState("");
 
-  // Phone OTP State
-  const [phoneOtp, setPhoneOtp] = useState("");
-  const [phoneOtpSent, setPhoneOtpSent] = useState(false);
-  const [phoneVerified, setPhoneVerified] = useState(false);
-  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [phoneLoading, setPhoneLoading] = useState(false);
-  const [phoneMsg, setPhoneMsg] = useState("");
-
-  // Email OTP State
-  const [emailOtp, setEmailOtp] = useState("");
-  const [emailOtpSent, setEmailOtpSent] = useState(false);
-  const [emailVerified, setEmailVerified] = useState(false);
-  const [emailLoading, setEmailLoading] = useState(false);
-  const [emailMsg, setEmailMsg] = useState("");
-  const [generatedEmailOtp, setGeneratedEmailOtp] = useState("");
-
-  // Location & Hospital
-  const [locationInput, setLocationInput] = useState("");
-  const [isDetecting, setIsDetecting] = useState(false);
-  const [detectedAddress, setDetectedAddress] = useState("");
-  const [selectedHospitalId, setSelectedHospitalId] = useState<number | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  // Init Firebase reCAPTCHA
+  // Init Firebase reCAPTCHA (harmless if unconfigured — we fall back to demo OTP)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    if (!window.recaptchaVerifier) {
-      try {
+    try {
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      if (!window.recaptchaVerifier) {
         window.recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
           size: "invisible",
           callback: () => {},
         });
-      } catch (err) {
-        console.error("Recaptcha error:", err);
       }
+    } catch {
+      /* demo mode */
     }
   }, []);
 
-  // --- PHONE OTP ---
-  const handleSendPhoneOtp = async () => {
-    if (!phoneNumber || phoneNumber.length < 10) {
-      setPhoneMsg("Enter a valid 10-digit phone number");
-      return;
-    }
-    setPhoneLoading(true);
-    setPhoneMsg("");
+  // Silent, best-effort GPS — zero taps from the patient
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setDetectedArea(`Lat ${pos.coords.latitude.toFixed(3)}, Lng ${pos.coords.longitude.toFixed(3)}`),
+      () => setDetectedArea(""),
+      { timeout: 4000 },
+    );
+  }, []);
+
+  const hospital = SAMPLE_HOSPITALS.find((h) => h.id === selectedHospitalId) ?? SAMPLE_HOSPITALS[0];
+
+  // ── STEP 1 → 2: send one OTP (Firebase, or demo fallback) ──
+  const sendOtp = async () => {
+    if (fullName.trim().length < 2) { setMsg("Please tell us your name"); return; }
+    if (phoneNumber.replace(/\D/g, "").length < 10) { setMsg("Enter a valid 10-digit phone number"); return; }
+    setLoading(true);
+    setMsg("");
+    const formatted = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber.replace(/\D/g, "")}`;
+
     try {
       const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      const formatted = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber}`;
       const confirmation = await signInWithPhoneNumber(auth, formatted, window.recaptchaVerifier);
       setConfirmationResult(confirmation);
-      setPhoneOtpSent(true);
-      setPhoneMsg("OTP sent to your phone!");
-    } catch (error: any) {
-      setPhoneMsg(`Error: ${error.message || "Failed to send OTP"}`);
-    } finally {
-      setPhoneLoading(false);
-    }
-  };
-
-  const handleVerifyPhoneOtp = async () => {
-    if (!confirmationResult) return;
-    setPhoneLoading(true);
-    setPhoneMsg("");
-    try {
-      await confirmationResult.confirm(phoneOtp);
-      setPhoneVerified(true);
-      setPhoneMsg("Phone verified ✓");
+      setMsg("OTP sent to your phone 📲");
     } catch {
-      setPhoneMsg("Invalid OTP. Try again.");
+      // Firebase not configured / quota / offline → demo OTP so the kiosk never dead-ends
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      setDemoOtp(code);
+      setMsg(`Demo mode (SMS not configured) — your OTP is ${code}`);
     } finally {
-      setPhoneLoading(false);
+      setStep(2);
+      setLoading(false);
     }
   };
 
-  // --- EMAIL OTP ---
-  const handleSendEmailOtp = async () => {
-    if (!email || !email.includes("@")) {
-      setEmailMsg("Enter a valid email address");
-      return;
-    }
-    setEmailLoading(true);
-    setEmailMsg("");
+  // ── STEP 2: verify the single OTP, create profile, go to kiosk ──
+  const verifyAndContinue = async () => {
+    setLoading(true);
+    setMsg("");
     try {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      setGeneratedEmailOtp(otp);
+      if (confirmationResult) {
+        await confirmationResult.confirm(otp);
+      } else if (demoOtp) {
+        if (otp !== demoOtp) { setMsg("Wrong OTP — check the code shown above"); setLoading(false); return; }
+      } else {
+        setMsg("Please request an OTP first"); setLoading(false); return;
+      }
+      setVerified(true);
 
-      const res = await fetch("/api/auth/send-email-otp", {
+      const formattedPhone = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber.replace(/\D/g, "")}`;
+      const cleanAbha = abhaId.replace(/-/g, "").trim();
+
+      // same localStorage contract the kiosk & portal already read
+      const profile = {
+        fullName: fullName.trim(),
+        abhaId: cleanAbha || "N/A",
+        email: email || undefined,
+        phoneNumber: formattedPhone,
+        location: detectedArea || undefined,
+        selectedHospital: hospital,
+      };
+      localStorage.setItem("patient_profile", JSON.stringify(profile));
+      if (cleanAbha) {
+        const existingDb = JSON.parse(localStorage.getItem("registered_abha_db") || "{}");
+        existingDb[cleanAbha] = formattedPhone;
+        existingDb[abhaId] = formattedPhone;
+        localStorage.setItem("registered_abha_db", JSON.stringify(existingDb));
+      }
+
+      // register server-side too (same route the demo login uses) — non-blocking
+      fetch("/api/auth/demo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, otp, name: fullName || "Patient" }),
-      });
+        body: JSON.stringify({ kind: "patient", identifier: formattedPhone, fullName: fullName.trim() }),
+      }).catch(() => {});
 
-      if (!res.ok) throw new Error("Failed to send email");
-
-      setEmailOtpSent(true);
-      setEmailMsg("OTP sent to your email!");
+      setTimeout(() => router.push("/kiosk"), 700);
     } catch {
-      console.log("Demo Email OTP:", generatedEmailOtp || "123456");
-      setEmailOtpSent(true);
-      setEmailMsg("OTP sent to email! (Or enter 123456)");
+      setMsg("Invalid OTP. Try again.");
     } finally {
-      setEmailLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleVerifyEmailOtp = () => {
-    if (emailOtp === generatedEmailOtp || emailOtp === "123456") {
-      setEmailVerified(true);
-      setEmailMsg("Email verified ✓");
-    } else {
-      setEmailMsg("Invalid email OTP. Try again.");
-    }
-  };
+  const inputCls =
+    "w-full rounded-xl border border-gray-300 px-4 py-3 text-base text-black focus:ring-2 focus:ring-teal-500 focus:outline-none";
 
-  // --- GPS LOCATION ---
-  const handleDetectLocation = () => {
-    if (!navigator.geolocation) {
-      alert("Geolocation not supported");
-      return;
-    }
-    setIsDetecting(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setDetectedAddress(`Lat: ${latitude.toFixed(4)}, Lng: ${longitude.toFixed(4)}`);
-        setLocationInput("My Current Location");
-        setIsDetecting(false);
-      },
-      () => {
-        alert("Unable to fetch location. Type manually.");
-        setIsDetecting(false);
-      }
+  if (verified) {
+    return (
+      <div className="mx-auto max-w-xl rounded-2xl border border-teal-200 bg-white p-8 text-center shadow-xl">
+        <div id="recaptcha-container" />
+        <PartyPopper className="mx-auto h-10 w-10 text-teal-600" />
+        <h2 className="mt-3 text-2xl font-bold text-gray-900">You&apos;re in, {fullName.split(" ")[0]}!</h2>
+        <p className="mt-2 text-sm text-gray-500">
+          Hospital: <b>{hospital.name}</b> · Profile saved. Opening your clinical interview…
+        </p>
+        <div className="mx-auto mt-5 flex items-center justify-center gap-2 text-teal-700">
+          <Loader2 className="h-4 w-4 animate-spin" /> <span className="text-sm">Loading kiosk…</span>
+        </div>
+      </div>
     );
-  };
-
-  // --- SUBMIT ACCOUNT & LINK ABHA ID ---
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!phoneVerified) { alert("Please verify your phone number first."); return; }
-    if (!emailVerified) { alert("Please verify your email first."); return; }
-    if (!selectedHospitalId) { alert("Please select a hospital."); return; }
-
-    setSubmitting(true);
-
-    const formattedPhone = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber}`;
-    const cleanAbha = abhaId.replace(/-/g, "").trim();
-
-    // 1. LINK ABHA ID to Phone Number in Database (localStorage)
-    if (cleanAbha) {
-      const existingDb = JSON.parse(localStorage.getItem("registered_abha_db") || "{}");
-      existingDb[cleanAbha] = formattedPhone;
-      existingDb[abhaId] = formattedPhone; // Store formatted as well
-      localStorage.setItem("registered_abha_db", JSON.stringify(existingDb));
-    }
-
-    // 2. Save complete patient profile
-    const profile = {
-      fullName,
-      abhaId: cleanAbha || "N/A",
-      email,
-      phoneNumber: formattedPhone,
-      location: locationInput || detectedAddress,
-      selectedHospital: SAMPLE_HOSPITALS.find((h) => h.id === selectedHospitalId),
-    };
-    localStorage.setItem("patient_profile", JSON.stringify(profile));
-
-    setTimeout(() => {
-      router.push("/kiosk");
-    }, 800);
-  };
+  }
 
   return (
-    <div className="max-w-2xl mx-auto bg-white rounded-2xl shadow-xl border border-gray-100 p-6 md:p-8">
-      <div className="mb-6 border-b pb-4">
-        <h2 className="text-2xl font-bold text-gray-900">Patient Sign Up</h2>
-        <p className="text-sm text-gray-500 mt-1">
-          Create account · Link ABHA ID · Verify phone & email · Select hospital
-        </p>
-      </div>
-
+    <div className="mx-auto max-w-xl rounded-2xl border border-gray-100 bg-white p-6 shadow-xl md:p-8">
       <div id="recaptcha-container"></div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-
-        {/* ── FULL NAME ── */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Full Name *</label>
-          <div className="relative">
-            <User className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-            <input
-              type="text"
-              required
-              placeholder="e.g. Ramesh Kumar"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
-            />
-          </div>
+      <div className="mb-5 border-b pb-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold text-gray-900">Quick sign up</h2>
+          <span className="rounded-full bg-teal-50 px-3 py-1 text-[11px] font-bold text-teal-700">
+            {step === 1 ? "STEP 1 OF 2 · 30 SECONDS" : "STEP 2 OF 2 · VERIFY"}
+          </span>
         </div>
+        <p className="mt-1 text-sm text-gray-500">Just your name and phone — everything else can wait.</p>
+      </div>
 
-        {/* ── ABHA ID (LINKED TO PHONE) ── */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">
-            ABHA ID / Number <span className="text-xs text-teal-600 font-normal">(Optional - Links to your phone for fast login)</span>
-          </label>
-          <div className="relative">
-            <Shield className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-            <input
-              type="text"
-              placeholder="12-3456-7890-1234"
-              value={abhaId}
-              onChange={(e) => setAbhaId(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
-            />
-          </div>
-        </div>
-
-        {/* ── PHONE + OTP VERIFICATION ── */}
-        <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
-          <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-            <Phone className="h-4 w-4" /> Phone Number *
-            {phoneVerified && <span className="ml-auto text-xs text-green-600 font-bold flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Verified</span>}
-          </label>
-
-          <div className="flex gap-2">
-            <input
-              type="tel"
-              required
-              placeholder="10-digit number"
-              value={phoneNumber}
-              disabled={phoneVerified}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100"
-            />
-            {!phoneVerified && !phoneOtpSent && (
-              <button
-                type="button"
-                onClick={handleSendPhoneOtp}
-                disabled={phoneLoading}
-                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap"
-              >
-                {phoneLoading ? "Sending..." : "Send OTP"}
-              </button>
-            )}
-          </div>
-
-          {phoneOtpSent && !phoneVerified && (
-            <div className="flex gap-2">
+      {step === 1 && (
+        <div className="space-y-5">
+          {/* Field 1 — name */}
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-gray-700">Name *</label>
+            <div className="relative">
+              <User className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" />
               <input
                 type="text"
-                maxLength={6}
-                placeholder="Enter 6-digit OTP"
-                value={phoneOtp}
-                onChange={(e) => setPhoneOtp(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                autoFocus
+                placeholder="e.g. Ramesh Kumar"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className={`${inputCls} pl-10`}
               />
-              <button
-                type="button"
-                onClick={handleVerifyPhoneOtp}
-                disabled={phoneLoading}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
-              >
-                {phoneLoading ? "..." : "Verify"}
-              </button>
             </div>
-          )}
-          {phoneMsg && <p className={`text-xs ${phoneMsg.includes("Error") || phoneMsg.includes("Invalid") ? "text-red-500" : "text-green-600"}`}>{phoneMsg}</p>}
-        </div>
-
-        {/* ── EMAIL + OTP VERIFICATION ── */}
-        <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-3">
-          <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-            <Mail className="h-4 w-4" /> Email Address *
-            {emailVerified && <span className="ml-auto text-xs text-green-600 font-bold flex items-center gap-1"><CheckCircle2 className="h-3.5 w-3.5" /> Verified</span>}
-          </label>
-
-          <div className="flex gap-2">
-            <input
-              type="email"
-              required
-              placeholder="ramesh@example.com"
-              value={email}
-              disabled={emailVerified}
-              onChange={(e) => setEmail(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none disabled:bg-gray-100"
-            />
-            {!emailVerified && !emailOtpSent && (
-              <button
-                type="button"
-                onClick={handleSendEmailOtp}
-                disabled={emailLoading}
-                className="px-4 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 whitespace-nowrap"
-              >
-                {emailLoading ? "Sending..." : "Send OTP"}
-              </button>
-            )}
           </div>
 
-          {emailOtpSent && !emailVerified && (
-            <div className="flex gap-2">
+          {/* Field 2 — phone */}
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-gray-700">Phone number *</label>
+            <div className="relative">
+              <Phone className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" />
               <input
-                type="text"
-                maxLength={6}
-                placeholder="Enter email OTP"
-                value={emailOtp}
-                onChange={(e) => setEmailOtp(e.target.value)}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-black text-center tracking-widest focus:ring-2 focus:ring-teal-500 focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={handleVerifyEmailOtp}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700"
-              >
-                Verify
-              </button>
-            </div>
-          )}
-          {emailMsg && <p className={`text-xs ${emailMsg.includes("Invalid") ? "text-red-500" : "text-green-600"}`}>{emailMsg}</p>}
-        </div>
-
-        {/* ── LOCATION ── */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-1">Your Location / Area</label>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <MapPin className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Enter city, town, or pincode"
-                value={locationInput}
-                onChange={(e) => setLocationInput(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-black focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                type="tel"
+                inputMode="numeric"
+                placeholder="10-digit mobile"
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                className={`${inputCls} pl-10`}
               />
             </div>
-            <button
-              type="button"
-              onClick={handleDetectLocation}
-              disabled={isDetecting}
-              className="flex items-center gap-2 bg-teal-50 text-teal-700 px-4 py-2 rounded-lg border border-teal-200 font-medium hover:bg-teal-100 disabled:opacity-50"
-            >
-              <Navigation className="h-4 w-4" />
-              {isDetecting ? "Detecting..." : "GPS Detect"}
-            </button>
           </div>
-          {detectedAddress && <p className="text-xs text-teal-600 mt-1">{detectedAddress}</p>}
-        </div>
 
-        {/* ── SELECT HOSPITAL ── */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">Select Nearest Hospital *</label>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {SAMPLE_HOSPITALS.map((h) => {
-              const sel = selectedHospitalId === h.id;
-              return (
+          {/* Auto-selected hospital — visible, one tap to change, never blocking */}
+          <button
+            type="button"
+            onClick={() => setShowHospitalPicker((s) => !s)}
+            className="flex w-full items-center gap-3 rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3 text-left"
+          >
+            <Building2 className="h-5 w-5 shrink-0 text-teal-600" />
+            <span className="flex-1 text-sm">
+              <span className="font-semibold text-gray-800">{hospital.name}</span>
+              <span className="ml-2 text-xs text-teal-700">auto-selected · {hospital.distance} away</span>
+              <span className="block text-[11px] text-gray-500">Tap to change hospital</span>
+            </span>
+            {showHospitalPicker ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+          </button>
+          {showHospitalPicker && (
+            <div className="grid grid-cols-1 gap-2">
+              {SAMPLE_HOSPITALS.map((h) => (
                 <div
                   key={h.id}
-                  onClick={() => setSelectedHospitalId(h.id)}
-                  className={`cursor-pointer p-4 rounded-xl border transition-all flex items-start justify-between ${
-                    sel ? "border-teal-600 bg-teal-50/50 shadow-sm" : "border-gray-200 hover:border-teal-200"
+                  onClick={() => { setSelectedHospitalId(h.id); setShowHospitalPicker(false); }}
+                  className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition ${
+                    selectedHospitalId === h.id ? "border-teal-600 bg-teal-50/50" : "border-gray-200 hover:border-teal-200"
                   }`}
                 >
-                  <div className="flex items-start gap-3">
-                    <Building2 className={`h-5 w-5 mt-0.5 ${sel ? "text-teal-600" : "text-gray-400"}`} />
-                    <div>
-                      <h4 className="font-semibold text-gray-900 text-sm">{h.name}</h4>
-                      <p className="text-xs text-gray-500 mt-0.5">{h.address}</p>
-                      <span className="inline-block mt-2 text-[11px] font-medium text-teal-700 bg-teal-100/60 px-2 py-0.5 rounded">{h.distance} away</span>
-                    </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">{h.name}</p>
+                    <p className="text-xs text-gray-500">{h.address} · {h.distance}</p>
                   </div>
-                  {sel && <CheckCircle2 className="h-5 w-5 text-teal-600" />}
+                  {selectedHospitalId === h.id && <CheckCircle2 className="h-5 w-5 text-teal-600" />}
                 </div>
-              );
-            })}
+              ))}
+            </div>
+          )}
+
+          {/* Optional — collapsed, deferred (progressive profiling) */}
+          <div className="rounded-xl bg-gray-50 p-3">
+            <button type="button" onClick={() => setShowOptional((s) => !s)} className="flex w-full items-center justify-between text-sm font-medium text-gray-600">
+              <span>Optional (can also be added later): ABHA ID · email</span>
+              {showOptional ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+            {showOptional && (
+              <div className="mt-3 space-y-3">
+                <div className="relative">
+                  <Shield className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="ABHA ID — 12-3456-7890-1234 (optional)"
+                    value={abhaId}
+                    onChange={(e) => setAbhaId(e.target.value)}
+                    className={`${inputCls} pl-10`}
+                  />
+                </div>
+                <input
+                  type="email"
+                  placeholder="Email (optional — no verification needed now)"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+            )}
           </div>
+
+          <button
+            type="button"
+            onClick={() => void sendOtp()}
+            disabled={loading}
+            className="w-full rounded-xl bg-teal-700 py-3.5 font-semibold text-white transition hover:bg-teal-800 disabled:bg-gray-400"
+          >
+            {loading ? "Sending OTP…" : "Send OTP →"}
+          </button>
         </div>
+      )}
 
-        {/* ── SUBMIT BUTTON ── */}
-        <button
-          type="submit"
-          disabled={submitting || !phoneVerified || !emailVerified}
-          className="w-full bg-teal-700 text-white font-semibold py-3 rounded-xl hover:bg-teal-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-        >
-          {submitting ? "Linking ABHA & Creating Account..." : "Create Account & Link ABHA →"}
-        </button>
+      {step === 2 && (
+        <div className="space-y-5">
+          <p className="text-sm text-gray-600">
+            OTP sent to <b>+91 {phoneNumber.replace(/\D/g, "").slice(-10)}</b>{" "}
+            <button type="button" onClick={() => { setStep(1); setMsg(""); }} className="font-semibold text-teal-700 hover:underline">
+              change
+            </button>
+          </p>
+          <input
+            type="text"
+            inputMode="numeric"
+            autoFocus
+            maxLength={6}
+            placeholder="— — — — — —"
+            value={otp}
+            onChange={(e) => setOtp(e.target.value)}
+            className={`${inputCls} text-center text-2xl tracking-[0.5em]`}
+          />
+          <button
+            type="button"
+            onClick={() => void verifyAndContinue()}
+            disabled={loading || otp.length < 6}
+            className="w-full rounded-xl bg-teal-700 py-3.5 font-semibold text-white transition hover:bg-teal-800 disabled:bg-gray-400"
+          >
+            {loading ? "Verifying…" : "Verify & start →"}
+          </button>
+        </div>
+      )}
 
-        <p className="text-center text-sm text-gray-500">
-          Already have an account?{" "}
-          <a href="/login/patient" className="text-teal-700 font-semibold hover:underline">Login here</a>
+      {msg && (
+        <p className={`mt-3 text-sm ${msg.includes("OTP") && !msg.includes("Wrong") && !msg.includes("Invalid") ? "text-teal-700" : "text-red-500"}`}>
+          {msg}
         </p>
-      </form>
+      )}
+      {detectedArea && (
+        <p className="mt-3 flex items-center gap-1 text-[11px] text-gray-400">
+          <MapPin className="h-3 w-3" /> Location noted automatically: {detectedArea}
+        </p>
+      )}
+
+      <p className="mt-5 text-center text-sm text-gray-500">
+        Already registered?{" "}
+        <a href="/login/patient" className="font-semibold text-teal-700 hover:underline">Login here</a>
+      </p>
     </div>
   );
 }

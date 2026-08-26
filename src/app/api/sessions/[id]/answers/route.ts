@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { historyResponses, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
-import { evaluateRedFlags } from "@/lib/redflags";
+import { evaluateRedFlags, evaluateRedFlagsFromText, mergeRedFlagResults } from "@/lib/redflags";
 import { answersMap } from "@/lib/session-data";
 import { and, eq } from "drizzle-orm";
 
@@ -58,7 +58,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   const all = await db.select().from(historyResponses).where(eq(historyResponses.sessionId, id));
-  const flags = evaluateRedFlags(answersMap(all));
+
+  // Layer 1: structured answer rules
+  // Layer 1b: screen everything the patient spoke/typed (incl. this new answer)
+  const structured = evaluateRedFlags(answersMap(all));
+  const transcript = all
+    .map((r) => {
+      const json = r.answerJson as { values?: string[]; text?: string } | null;
+      return [r.answerText, json?.text ?? ""].join(" ");
+    })
+    .join(" ");
+  const spoken = evaluateRedFlagsFromText(transcript);
+  const flags = mergeRedFlagResults(structured, spoken);
+
   await db
     .update(sessions)
     .set({

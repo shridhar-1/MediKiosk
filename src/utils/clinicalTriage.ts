@@ -1,4 +1,15 @@
-// src/utils/clinicalTriage.ts
+/**
+ * src/utils/clinicalTriage.ts
+ * ───────────────────────────────────────────────────────────────────────────
+ * DEPRECATED as a separate implementation — now a thin compatibility wrapper
+ * around the canonical engine in src/lib/redflags.ts so there is exactly ONE
+ * definition of "what is an emergency" in the codebase.
+ *
+ * Keeps the original exported signature used by callers:
+ *   evaluateRedFlags(transcript: string, symptoms: string[]): RedFlagAlert
+ */
+import { evaluateRedFlagsFromText } from "@/lib/redflags";
+
 export interface RedFlagAlert {
   isCritical: boolean;
   alertType: 'CARDIAC_CRITICAL' | 'STROKE_FAST' | 'ACUTE_RESPIRATORY' | 'ANAPHYLAXIS' | 'NONE';
@@ -6,52 +17,30 @@ export interface RedFlagAlert {
   recommendedAction: string;
 }
 
-export const evaluateRedFlags = (transcript: string, symptoms: string[]): RedFlagAlert => {
-  const normalized = (transcript + ' ' + symptoms.join(' ')).toLowerCase();
+const TYPE_BY_RULE: Record<string, RedFlagAlert['alertType']> = {
+  'RF-ACS-01': 'CARDIAC_CRITICAL',
+  'RF-STROKE-04': 'STROKE_FAST',
+  'RF-RESP-03': 'ACUTE_RESPIRATORY',
+};
 
-  // Cardiac Emergency
-  if (
-    (normalized.includes('chest pain') || normalized.includes('छाती में दर्द') || normalized.includes('seene me dard')) &&
-    (normalized.includes('left arm') || normalized.includes('sweating') || normalized.includes('breathless') || normalized.includes('jaw pain'))
-  ) {
+export const evaluateRedFlags = (transcript: string, symptoms: string[] = []): RedFlagAlert => {
+  const result = evaluateRedFlagsFromText([transcript, ...symptoms].join(' '));
+
+  if (!result.triggered || result.priority !== 'emergency') {
     return {
-      isCritical: true,
-      alertType: 'CARDIAC_CRITICAL',
-      message: '🚨 CRITICAL: Potential Acute Coronary Syndrome (ACS) detected.',
-      recommendedAction: 'Immediate triage bypass to Emergency/Crash Cart. Stat 12-lead ECG required.',
+      isCritical: false,
+      alertType: 'NONE',
+      message: 'Standard OPD Priority.',
+      recommendedAction: 'Proceed with routine queue routing.',
     };
   }
 
-  // Stroke / FAST protocol
-  if (
-    normalized.includes('slurred speech') ||
-    normalized.includes('face drooping') ||
-    normalized.includes('arm weakness') ||
-    normalized.includes('ek taraf kamzori')
-  ) {
-    return {
-      isCritical: true,
-      alertType: 'STROKE_FAST',
-      message: '🚨 CRITICAL: Potential Acute Ischemic Stroke detected.',
-      recommendedAction: 'Code Stroke Protocol. Transfer to CT/Emergency immediately.',
-    };
-  }
-
-  // Severe Respiratory Distress
-  if (normalized.includes('unable to speak full sentences') || normalized.includes('gasping for air') || normalized.includes('stridor')) {
-    return {
-      isCritical: true,
-      alertType: 'ACUTE_RESPIRATORY',
-      message: '🚨 CRITICAL: Acute Respiratory Compromise.',
-      recommendedAction: 'Immediate SpO2 check and high-flow oxygen support triage.',
-    };
-  }
-
+  const top = result.fired[0];
   return {
-    isCritical: false,
-    alertType: 'NONE',
-    message: 'Standard OPD Priority.',
-    recommendedAction: 'Proceed with routine queue routing.',
+    isCritical: true,
+    alertType: TYPE_BY_RULE[top?.id ?? ''] ?? 'ANAPHYLAXIS',
+    message: `🚨 CRITICAL: ${top?.name ?? 'Emergency red flag'} detected.`,
+    recommendedAction: top?.action ?? 'Immediate triage bypass to Emergency.',
   };
 };
 

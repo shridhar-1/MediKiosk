@@ -7,7 +7,7 @@ export default function PatientSetupPage() {
         {/* Header Branding */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-extrabold text-teal-900">MediKiosk</h1>
-          <p className="text-gray-600 mt-1">Rural Healthcare Platform</p>
+                    <p className="text-gray-600 mt-1">Name · phone · one OTP — that&apos;s it. Hospital is auto-selected, everything else can wait.</p>
         </div>
 
         {/* Form */}

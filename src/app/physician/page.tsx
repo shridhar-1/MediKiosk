@@ -4,6 +4,7 @@ import { staffOrDemo } from "@/lib/auth";
 import { db } from "@/db";
 import { clinicalSummaries, patients, sessions } from "@/db/schema";
 import { PhysicianNav } from "@/components/physician/nav";
+import LiveAlerts from "@/components/physician/live-alerts";
 import { DeleteSessionButton } from "@/components/physician/delete-session-button";
 import { seedIfEmpty } from "@/lib/seed";
 import { DEPARTMENTS } from "@/lib/types";
@@ -55,20 +56,23 @@ export default async function PhysicianQueuePage() {
               Histories arrive before the patient. Confirm, amend, or send back. Red flags skip the ordinary queue.
             </p>
           </div>
-          <dl className="grid grid-cols-3 gap-4 text-sm">
-            <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-              <dt className="text-[#4a4338]">Waiting</dt>
-              <dd className="serif text-2xl">{waiting.length}</dd>
-            </div>
-            <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-              <dt className="text-[#4a4338]">Emergency</dt>
-              <dd className="serif text-2xl text-[#b42318]">{emergencies.length}</dd>
-            </div>
-            <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-              <dt className="text-[#4a4338]">Confirmed</dt>
-              <dd className="serif text-2xl">{done.length}</dd>
-            </div>
-          </dl>
+                    <div className="flex flex-col items-end gap-3">
+            <LiveAlerts />
+            <dl className="grid grid-cols-3 gap-4 text-sm">
+              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-[#4a4338]">Waiting</dt>
+                <dd className="serif text-2xl">{waiting.length}</dd>
+              </div>
+              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-[#4a4338]">Emergency</dt>
+                <dd className="serif text-2xl text-[#b42318]">{emergencies.length}</dd>
+              </div>
+              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-[#4a4338]">Confirmed</dt>
+                <dd className="serif text-2xl">{done.length}</dd>
+              </div>
+            </dl>
+          </div>
         </div>
 
         {emergencies.length > 0 && (

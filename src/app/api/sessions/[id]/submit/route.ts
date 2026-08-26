@@ -1,8 +1,9 @@
 import { db } from "@/db";
 import { hisEvents, patients, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
+import { notifyHospitalSubmission } from "@/lib/notify";
 import { loadSessionBundle } from "@/lib/session-data";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -69,5 +70,31 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     .returning();
 
   const [session] = await db.select().from(sessions).where(eq(sessions.id, id));
-  return Response.json({ session, event });
+
+  // ── AUTOMATED HOSPITAL NOTIFICATION ─────────────────────────────────────
+  // Fires the moment the form is submitted: console alert event + email +
+  // WhatsApp + SMS (channels without env config degrade to "mock", never throw).
+  const latestFlags = await db
+    .select({ priority: sessions.priority, reasons: sessions.redFlagReasons, department: sessions.department, token: sessions.tokenNumber })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .orderBy(desc(sessions.startedAt))
+    .limit(1);
+
+  const notifications = await notifyHospitalSubmission({
+    sessionId: id,
+    tokenNumber: session?.tokenNumber ?? null,
+    priority: (latestFlags[0]?.priority as "routine" | "urgent" | "emergency") ?? "routine",
+    redFlagReasons: latestFlags[0]?.reasons ?? [],
+    department: latestFlags[0]?.department ?? "general_medicine",
+    patient: {
+      fullName: patient?.fullName ?? bundle.patient.fullName,
+      age: patient?.age ?? null,
+      gender: patient?.gender ?? null,
+      phone: patient?.phone ?? null,
+      abhaId: patient?.abhaId ?? null,
+    },
+  });
+
+  return Response.json({ session, event, notifications });
 }
