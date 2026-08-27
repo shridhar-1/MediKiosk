@@ -42,7 +42,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
 /**
  * PATCH /api/sessions/:id/summary — staff save amendments or confirm to HIS.
- * Expects { fields?, status?, reviewedBy?, physicianNotes? }.
+ * Expects { fields?, status?, reviewedBy?, physicianNotes?, patientAdvice? }.
  */
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -56,6 +56,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       status?: "draft" | "confirmed";
       reviewedBy?: string;
       physicianNotes?: string;
+      patientAdvice?: string;
     };
     const [existing] = await db.select().from(clinicalSummaries).where(eq(clinicalSummaries.sessionId, id)).limit(1);
     if (!existing) {
@@ -71,11 +72,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       set.status = body.status;
       if (body.status === "confirmed") set.confirmedAt = new Date();
     }
-    if (body.physicianNotes !== undefined) {
+    // Doctor's advice for the patient — visible in the patient portal
+    if (body.patientAdvice !== undefined) {
+      set.patientAdvice = body.patientAdvice;
+    }
+    if (body.physicianNotes !== undefined || body.status === "confirmed") {
       await db
         .update(sessions)
         .set({
-          physicianNotes: body.physicianNotes,
+          ...(body.physicianNotes !== undefined ? { physicianNotes: body.physicianNotes } : {}),
           ...(body.status === "confirmed"
             ? { status: "reviewed", reviewedAt: new Date(), reviewedBy: body.reviewedBy ?? member.fullName }
             : {}),
