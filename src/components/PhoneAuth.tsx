@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   RecaptchaVerifier,
@@ -52,18 +52,12 @@ export default function PhoneAuth() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  /* ────────────────────────────────────────────────────────────────────────
-     ROBUST reCAPTCHA HANDLING (fixes "reCAPTCHA client element has been removed")
-     • A FRESH verifier is created for every send — stale ones are cleared first
-     • The container div is verified to exist in the DOM before binding
-     • If Firebase fails for ANY reason (widget removed, quota, unauthorized
-       domain, offline), we fall back to a demo OTP so login never dead-ends.
-     ──────────────────────────────────────────────────────────────────────── */
+  /* FIX: fresh reCAPTCHA verifier on every send — no more
+     "reCAPTCHA client element has been removed" errors */
   const getFreshVerifier = (): RecaptchaVerifier | null => {
     try {
       const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
       const auth = getAuth(app);
-      // tear down any stale verifier whose DOM element may have been replaced
       try {
         window.recaptchaVerifier?.clear?.();
       } catch {
@@ -84,9 +78,7 @@ export default function PhoneAuth() {
     }
   };
 
-  const sendOtpWithFallback = async (
-    phoneE164: string,
-  ): Promise<"firebase" | "demo"> => {
+  const sendOtpWithFallback = async (phoneE164: string): Promise<"firebase" | "demo"> => {
     const verifier = getFreshVerifier();
     if (verifier) {
       try {
@@ -104,6 +96,32 @@ export default function PhoneAuth() {
   };
 
   const makeDemoOtp = () => Math.floor(100000 + Math.random() * 900000).toString();
+
+  /* FIX: after OTP success, tell the server who logged in.
+     1. POST /api/auth/demo → finds/creates patient by phone + sets login cookie,
+        so /kiosk shows "Continue as <your name>" instead of asking again.
+     2. Save profile to localStorage so the portal can show your history. */
+  const finishLogin = async (phoneE164: string) => {
+    const digits = phoneE164.replace(/\D/g, "").slice(-10); // normalize to 10 digits
+    try {
+      const res = await fetch("/api/auth/demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "patient", identifier: digits }),
+      });
+      const data = await res.json();
+      const name = data?.patient?.fullName || "Patient";
+      localStorage.setItem(
+        "patient_profile",
+        JSON.stringify({ fullName: name, phoneNumber: digits, abhaId: data?.patient?.abhaId || "" }),
+      );
+    } catch {
+      localStorage.setItem(
+        "patient_profile",
+        JSON.stringify({ fullName: "Patient", phoneNumber: digits, abhaId: "" }),
+      );
+    }
+  };
 
   // --- PHONE LOGIN FLOW ---
   const handleSendOtp = async (e: React.FormEvent) => {
@@ -147,8 +165,10 @@ export default function PhoneAuth() {
         setLoading(false);
         return;
       }
-      setMessage("Verified! Redirecting...");
-      setTimeout(() => router.push("/kiosk"), 800);
+      setMessage("Verified! Loading your account…");
+      const formatted = phoneNumber.startsWith("+") ? phoneNumber : `+91${phoneNumber.replace(/\D/g, "")}`;
+      await finishLogin(formatted);
+      setTimeout(() => router.push("/kiosk"), 600);
     } catch {
       setMessage("Invalid OTP. Please try again.");
       setLoading(false);
@@ -164,11 +184,9 @@ export default function PhoneAuth() {
 
     const cleanAbha = abhaId.replace(/-/g, "").trim();
 
-    // Read dynamic user registrations from Sign Up page
     const customAbhaDb = JSON.parse(localStorage.getItem("registered_abha_db") || "{}");
     const combinedDb = { ...DEFAULT_ABHA_DATABASE, ...customAbhaDb };
 
-    // Find linked phone number
     const foundPhone = combinedDb[cleanAbha] || combinedDb[abhaId];
 
     if (!foundPhone) {
@@ -178,7 +196,6 @@ export default function PhoneAuth() {
       return;
     }
 
-    // ABHA Found! Send OTP to linked phone (with demo fallback)
     setLinkedPhone(foundPhone);
     const kind = await sendOtpWithFallback(foundPhone);
     if (kind === "demo") {
@@ -212,8 +229,9 @@ export default function PhoneAuth() {
         setLoading(false);
         return;
       }
-      setMessage("ABHA login successful! Redirecting...");
-      setTimeout(() => router.push("/patient/portal"), 800);
+      setMessage("ABHA login successful! Opening your history…");
+      await finishLogin(linkedPhone);
+      setTimeout(() => router.push("/portal"), 600);
     } catch {
       setMessage("Invalid OTP code. Please try again.");
       setLoading(false);

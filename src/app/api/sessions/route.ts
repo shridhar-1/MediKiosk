@@ -28,13 +28,19 @@ export async function GET(request: Request) {
       .orderBy(desc(sessions.startedAt));
 
     // Filter by query parameters if present
+    // NOTE: phones are normalized to the LAST 10 DIGITS so that
+    // "+919876543210", "919876543210" and "9876543210" all match each other.
+    const last10 = (p?: string | null) => (p ?? "").replace(/\D/g, "").slice(-10);
     let filteredRows = rows;
     if (patientId) {
       filteredRows = rows.filter((r) => r.patient.id === patientId);
     } else if (phone) {
-      filteredRows = rows.filter((r) => r.patient.phone === phone);
+      const wanted = last10(phone);
+      filteredRows =
+        wanted.length === 10 ? rows.filter((r) => last10(r.patient.phone) === wanted) : [];
     } else if (abhaId) {
-      filteredRows = rows.filter((r) => r.patient.abhaId === abhaId);
+      const digits = abhaId.replace(/\D/g, "");
+      filteredRows = rows.filter((r) => (r.patient.abhaId ?? "").replace(/\D/g, "") === digits);
     }
 
     return Response.json({

@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { patients } from "@/db/schema";
 import { formatAbha, nid } from "@/lib/ids";
-import { and, eq, ilike } from "drizzle-orm";
+import { and, eq, ilike, isNotNull } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +72,34 @@ export async function POST(request: Request) {
       .limit(1);
     if (existing) {
       return Response.json({ patient: existing, existing: true });
+    }
+  }
+
+  // ── PHONE DE-DUPE (fixes "history gone") ────────────────────────────────
+  // Before creating a new patient, look for an existing one with the SAME
+  // phone number (compared on the last 10 digits, so +91 / 91 / 10-digit all
+  // match). Reuse that record so all visits stay on ONE patient history.
+  if (body.phone) {
+    const digits = body.phone.replace(/\D/g, "").slice(-10);
+    if (digits.length === 10) {
+      const withPhone = await db.select().from(patients).where(isNotNull(patients.phone));
+      const existing = withPhone.find(
+        (p) => (p.phone ?? "").replace(/\D/g, "").slice(-10) === digits,
+      );
+      if (existing) {
+        const [updated] = await db
+          .update(patients)
+          .set({
+            fullName: body.fullName ?? existing.fullName,
+            age: Number(body.age) || existing.age,
+            gender: body.gender ?? existing.gender,
+            preferredLanguage: body.preferredLanguage ?? existing.preferredLanguage,
+            aadhaarLast4: body.aadhaarLast4 ?? existing.aadhaarLast4,
+          })
+          .where(eq(patients.id, existing.id))
+          .returning();
+        return Response.json({ patient: updated, existing: true });
+      }
     }
   }
 
