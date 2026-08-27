@@ -128,6 +128,9 @@ export const clinicalSummaries = pgTable("clinical_summaries", {
   investigationsSummary: text("investigations_summary"),
   medicationsExtracted: text("medications_extracted"),
   physicianEdits: jsonb("physician_edits").$type<Record<string, string> | null>(),
+  // Doctor's advice written FOR the patient — shown in the patient portal.
+  // (Keep physicianNotes private; this is the patient-facing field.)
+  patientAdvice: text("patient_advice"),
   status: text("status").notNull().default("draft"),
   engine: text("engine"),
   aiUsed: boolean("ai_used").notNull().default(false),

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { 
   PlusCircle, Trash2, Calendar, FileText, User, 
-  Clock, ShieldCheck, ArrowRight, Activity, ChevronDown, ChevronUp 
+  Clock, ShieldCheck, ChevronDown, ChevronUp 
 } from "lucide-react";
 
 export default function PatientPortalPage() {
@@ -174,6 +174,15 @@ export default function PatientPortalPage() {
                               Emergency
                             </span>
                           )}
+                          {summary?.status === "confirmed" || item.reviewedBy ? (
+                            <span className="text-xs uppercase bg-green-100 text-green-800 px-2 py-0.5 rounded font-bold">
+                              ✅ Doctor reviewed
+                            </span>
+                          ) : (
+                            <span className="text-xs uppercase bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-medium">
+                              ⏳ Awaiting review
+                            </span>
+                          )}
                         </div>
 
                         <p className="text-xs text-[#4a4338] mt-1 flex items-center gap-2">
@@ -211,6 +220,44 @@ export default function PatientPortalPage() {
                   {/* Expanded Summary View */}
                   {isExpanded && (
                     <div className="border-t bg-[#fffdf7] p-5 text-sm space-y-4">
+                      {/* DOCTOR'S REVIEW — visible to the patient */}
+                      <div className="rounded-2xl border border-teal-200 bg-teal-50/60 p-4">
+                        <p className="text-xs uppercase tracking-[0.16em] text-[#0f5c61] font-bold">
+                          👨‍⚕️ Doctor&apos;s review
+                        </p>
+                        {summary?.status === "confirmed" || item.reviewedBy ? (
+                          <>
+                            <p className="mt-1.5 text-sm text-[#08363a]">
+                              Reviewed by <b>Dr. {item.reviewedBy || "consultant"}</b>
+                              {item.reviewedAt
+                                ? ` on ${new Date(item.reviewedAt).toLocaleString("en-IN", {
+                                    day: "numeric",
+                                    month: "short",
+                                    year: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })}`
+                                : ""}
+                              {summary?.status === "confirmed" ? " — confirmed to your hospital record." : "."}
+                            </p>
+                            {summary?.patientAdvice ? (
+                              <p className="mt-2 rounded-xl border border-teal-200 bg-white p-3 text-gray-800">
+                                <b>Advice for you:</b> {summary.patientAdvice}
+                              </p>
+                            ) : (
+                              <p className="mt-1 text-xs text-[#4a4338]">
+                                The doctor did not write separate advice for this visit.
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="mt-1.5 text-sm text-[#4a4338]">
+                            ⏳ Awaiting review — the doctor will read this history during your consultation
+                            and the advice will appear here.
+                          </p>
+                        )}
+                      </div>
+
                       {summary ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs md:text-sm">
                           <div>

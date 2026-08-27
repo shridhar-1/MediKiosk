@@ -7,17 +7,64 @@ import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
+  
+  // Parse the new optional fields from the request body
+  let body: { 
+    reviewedBy?: string; 
+    physicianNotes?: string; 
+    patientAdvice?: string;
+    status?: string; 
+  } = {};
+  
+  try {
+    body = await request.json();
+  } catch (e) {
+    // Gracefully handle empty or invalid JSON bodies
+  }
+  const { reviewedBy, physicianNotes, patientAdvice, status } = body;
+
   const bundle = await loadSessionBundle(id);
   if (!bundle) return Response.json({ error: "Not found" }, { status: 404 });
 
+  // 1. Build the update payload dynamically based on the requested logic
+  const setPayload: Record<string, any> = {
+    status: "submitted", // Default fallback status
+    submittedAt: new Date(),
+  };
+
+  if (body.status === "confirmed" || body.status === "draft") {
+    setPayload.status = body.status;
+    if (body.status === "confirmed") {
+      setPayload.confirmedAt = new Date();
+    }
+  }
+
+  // Doctor's advice for the patient — visible in the patient portal
+  if (body.patientAdvice !== undefined) {
+    setPayload.patientAdvice = body.patientAdvice;
+  }
+
+  // 2. Physician notes and review status overrides
+  if (body.physicianNotes !== undefined || body.status === "confirmed") {
+    if (body.physicianNotes !== undefined) {
+      setPayload.physicianNotes = body.physicianNotes;
+    }
+    
+    if (body.status === "confirmed") {
+      setPayload.status = "reviewed"; // Overwrites "confirmed" status per the new logic
+      setPayload.reviewedAt = new Date();
+      if (body.reviewedBy) {
+        setPayload.reviewedBy = body.reviewedBy; 
+      }
+    }
+  }
+
+  // Update session with the dynamically built payload
   await db
     .update(sessions)
-    .set({
-      status: "submitted",
-      submittedAt: new Date(),
-    })
+    .set(setPayload)
     .where(eq(sessions.id, id));
 
   const [patient] = await db.select().from(patients).where(eq(patients.id, bundle.session.patientId));
@@ -49,6 +96,9 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
           section: [
             { title: "Chief complaint", text: { div: bundle.summary?.chiefComplaint ?? "" } },
             { title: "HPI", text: { div: bundle.summary?.hpi ?? "" } },
+            // Add notes and advice to the FHIR document if they are provided
+            ...(physicianNotes ? [{ title: "Physician Notes", text: { div: physicianNotes } }] : []),
+            ...(patientAdvice ? [{ title: "Patient Advice", text: { div: patientAdvice } }] : []),
           ],
         },
       },

@@ -43,7 +43,11 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
     }
     return init;
   });
-  const [notes, setNotes] = useState(session.physicianNotes ?? "");
+    const [notes, setNotes] = useState(session.physicianNotes ?? "");
+  // Doctor's advice FOR the patient — shown in their portal after confirm
+  const [advice, setAdvice] = useState(
+    (summary?.patientAdvice as string | undefined) ?? ""
+  );
   const [reviewedBy, setReviewedBy] = useState(session.reviewedBy ?? reviewer ?? "");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -137,6 +141,7 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
           status: confirm ? "confirmed" : "draft",
           reviewedBy,
           physicianNotes: notes,
+          patientAdvice: advice,
         }),
       });
       setMessage(confirm ? "Confirmed and filed to HIS / ABHA." : "Draft amendments saved.");
@@ -298,6 +303,17 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 </div>
               </section>
             )}
+
+            <label className="block">
+              <span className="text-xs uppercase tracking-[0.16em] text-[#0f5c61]">Advice for patient (shown in their portal)</span>
+              <textarea
+                value={advice}
+                onChange={(e) => setAdvice(e.target.value)}
+                rows={3}
+                className="mt-1.5 w-full rounded-2xl border border-[#0f5c61]/20 bg-[#f0f7f7] px-4 py-3"
+                placeholder="e.g. Take medicines after food. Blood test before next visit. Come back in 1 week."
+              />
+            </label>
 
             <label className="block">
               <span className="text-xs uppercase tracking-[0.16em] text-[#c9842a]">Physician note (not shown to patient)</span>
