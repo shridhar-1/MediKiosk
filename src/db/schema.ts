@@ -148,6 +148,20 @@ export const hisEvents = pgTable("his_events", {
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 
+// Patient SMS queue — drained by the hospital's Android SMS-gateway phone
+// (personal SIM with free daily SMS, e.g. Jio 100/day). The phone polls
+// GET /api/sms/outbox and sends each pending message via termux-sms-send,
+// then marks it sent via POST. Capped per day so we never exceed the pack.
+export const smsOutbox = pgTable("sms_outbox", {
+  id: uuid("id").primaryKey(),
+  phone: text("phone").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("pending"), // pending | sent | failed
+  source: text("source").notNull().default("system"), // token | review
+  createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  sentAt: timestamp("sent_at", { mode: "date" }),
+});
+
 export type ExtractedLab = {
   name: string;
   value: string;

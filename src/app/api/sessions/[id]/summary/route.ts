@@ -3,9 +3,10 @@
 // Uses generateSummaryForSession from lib (Groq fix + bilingual + fallback)
 
 import { db } from "@/db";
-import { clinicalSummaries, sessions } from "@/db/schema";
+import { clinicalSummaries, patients, sessions } from "@/db/schema";
 import { currentStaff } from "@/lib/auth";
 import { generateSummaryForSession } from "@/lib/summary-engine";
+import { enqueuePatientSms } from "@/lib/sms-outbox";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -42,7 +43,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
 /**
  * PATCH /api/sessions/:id/summary — staff save amendments or confirm to HIS.
- * Expects { fields?, status?, reviewedBy?, physicianNotes?, patientAdvice? }.
+ * Expects { fields?, status?, reviewedBy?, physicianNotes? }.
  */
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -92,6 +93,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       .set(Object.keys(set).length ? set : { generatedAt: new Date() })
       .where(eq(clinicalSummaries.id, existing.id))
       .returning();
+
+    // ── PATIENT SMS on confirm (via hospital's Android SMS-gateway phone) ──
+    // Queued in sms_outbox; the gateway phone polls /api/sms/outbox and sends
+    // it from the hospital SIM's free daily SMS pack. Never throws.
+    if (body.status === "confirmed") {
+      const [sess] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      if (sess) {
+        const [pt] = await db.select().from(patients).where(eq(patients.id, sess.patientId)).limit(1);
+        const reviewer = body.reviewedBy ?? member.fullName;
+        await enqueuePatientSms(
+          pt?.phone,
+          `MediKiosk: Dr. ${reviewer} has reviewed your visit (token ${sess.tokenNumber}). Open the MediKiosk portal to see the advice.`,
+          "review",
+        );
+      }
+    }
+
     return Response.json({ summary: updated });
   } catch (error: any) {
     console.error("PATCH /summary failed:", error);

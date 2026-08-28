@@ -2,6 +2,7 @@ import { db } from "@/db";
 import { hisEvents, patients, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { notifyHospitalSubmission } from "@/lib/notify";
+import { enqueuePatientSms } from "@/lib/sms-outbox";
 import { loadSessionBundle } from "@/lib/session-data";
 import { desc, eq } from "drizzle-orm";
 
@@ -145,6 +146,15 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       abhaId: patient?.abhaId ?? null,
     },
   });
+
+  // ── PATIENT TOKEN SMS (via hospital's Android SMS-gateway phone) ────────
+  // Queued in sms_outbox; the gateway phone polls /api/sms/outbox and sends
+  // it from the hospital SIM's free daily SMS pack. Never throws.
+  await enqueuePatientSms(
+    patient?.phone,
+    `MediKiosk: Your token is ${session?.tokenNumber ?? "-"}. Please wait for your turn. - District Hospital`,
+    "token",
+  );
 
   return Response.json({ session, event, notifications });
 }
