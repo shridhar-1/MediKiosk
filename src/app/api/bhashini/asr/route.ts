@@ -76,8 +76,18 @@ export async function POST(req: NextRequest) {
           new Blob([new Uint8Array(buffer)], { type: "audio/webm" }),
           "audio.webm",
         );
-        groqForm.append("model", "whisper-large-v3");
-        groqForm.append("language", language);
+                groqForm.append("model", "whisper-large-v3");
+        // Only force the language when Whisper supports it — a wrong forced
+        // language is the #1 cause of garbage transcripts.
+        const WHISPER_LANGS = new Set(["en", "hi", "bn", "ta", "te", "mr", "kn", "gu", "ml", "pa", "ur"]);
+        if (WHISPER_LANGS.has(language)) {
+          groqForm.append("language", language);
+        }
+        groqForm.append("temperature", "0");
+        groqForm.append(
+          "prompt",
+          "Patient describing symptoms at a hospital kiosk: fever, cough, cold, headache, body pain, vomiting, loose motion, chest pain, breathing difficulty, since how many days.",
+        );
         groqForm.append("response_format", "json");
 
         const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
