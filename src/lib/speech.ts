@@ -37,80 +37,42 @@ export function stopSpeaking(): void {
 }
 
 export function canRecognize(): boolean {
-  return Boolean(getCtor());
+  return true; // server ASR works in any browser; browser ASR is the fallback
 }
 
-// ========== BHASHINI / AI4BHARAT PLUGGABLE ASR (Future) ==========
-// Current: Browser Web Speech API (works offline, 7 Indian languages)
-// Future: Bhashini ASR API (Government of India, better for noisy OPD, accents)
+// ══════════════════════════════════════════════════════════════════════
+//  VOICE ENGINE — pluggable, zero UI change
+//
+//  Engine 1 (best): SERVER ASR  — record with MediaRecorder → POST
+//    /api/bhashini/asr → tries Bhashini ULCA (official Govt of India,
+//    handles noisy OPD + Indian accents + optional translation) then
+//    Groq Whisper (whisper-large-v3), then gives up.
+//  Engine 2 (fallback): Browser Web Speech API — works offline in
+//    Chromium browsers for en-IN/hi-IN style locales, no key needed.
+// ══════════════════════════════════════════════════════════════════════
 
-type AsrEngine = "browser" | "bhashini" | "ai4bharat";
-const ASR_ENGINE = (process.env.NEXT_PUBLIC_ASR_ENGINE || "browser") as AsrEngine;
-const BHASHINI_ASR_KEY = process.env.NEXT_PUBLIC_BHASHINI_API_KEY;
-const BHASHINI_ASR_URL = process.env.NEXT_PUBLIC_BHASHINI_ASR_URL || "https://dhruva-api.bhashini.gov.in/services/inference/pipeline";
+const MAX_RECORD_MS = 30_000; // safety cap per answer
 
-/**
- * Bhashini ASR - For noisy hospital environments
- * Docs: https://bhashini.gov.in
- * Supports: Hindi, Tamil, Telugu, Bengali, Marathi, Kannada with Indian accents
- */
-async function startBhashiniRecognition(
-  lang: Lang,
-  onText: (text: string, final: boolean) => void,
-  onEnd: () => void,
-  audioBlob: Blob
-): Promise<void> {
-  if (!BHASHINI_ASR_KEY) {
-    console.warn("Bhashini API key not set, falling back to browser ASR");
-    throw new Error("Bhashini key missing");
+/** Cached probe: does the server have a live ASR engine configured? */
+let serverAsrAvailable: boolean | null = null;
+async function probeServerAsr(): Promise<boolean> {
+  if (serverAsrAvailable !== null) return serverAsrAvailable;
+  try {
+    const res = await fetch("/api/bhashini/asr", { method: "GET" });
+    if (!res.ok) throw new Error(String(res.status));
+    const data = await res.json();
+    serverAsrAvailable = Boolean(data.bhashiniConfigured || data.groqConfigured);
+  } catch {
+    serverAsrAvailable = false;
   }
-
-  // Convert audio blob to base64 and call Bhashini
-  const base64 = await blobToBase64(audioBlob);
-  
-  const response = await fetch(BHASHINI_ASR_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": BHASHINI_ASR_KEY,
-    },
-    body: JSON.stringify({
-      pipelineTasks: [
-        {
-          taskType: "asr",
-          config: {
-            language: { sourceLanguage: lang === "en" ? "en" : lang },
-            serviceId: "ai4bharat/conformer-multilingual--asr",
-            audioFormat: "wav",
-            samplingRate: 16000,
-          },
-        },
-      ],
-      inputData: {
-        audio: [{ audioContent: base64 }],
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Bhashini ASR failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const transcript = data?.pipelineResponse?.[0]?.output?.[0]?.source || "";
-  
-  if (transcript) {
-    onText(transcript, true);
-  }
-  onEnd();
+  return serverAsrAvailable;
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64 = (reader.result as string).split(",")[1];
-      resolve(base64);
+      resolve((reader.result as string).split(",")[1] ?? "");
     };
     reader.onerror = reject;
     reader.readAsDataURL(blob);
@@ -118,24 +80,93 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Main recognition - pluggable engine
- * Current uses browser, but architecture ready for Bhashini
+ * ENGINE 1 — MediaRecorder → POST /api/bhashini/asr (Bhashini → Groq Whisper).
+ * Returns a stop() that ends recording, uploads, and calls onText/onEnd.
  */
-export function startRecognition(
+function startServerRecognition(
   lang: Lang,
   onText: (text: string, final: boolean) => void,
   onEnd: () => void,
 ): () => void {
-  // If Bhashini is configured and we want to use it, we would need audio recording
-  // For now, we use browser ASR as primary, with Bhashini as future roadmap
-  // This abstraction allows zero UI change when swapping engines
-  
-  if (ASR_ENGINE === "bhashini" && BHASHINI_ASR_KEY) {
-    // Future: Implement MediaRecorder → Bhashini flow
-    // For demo, fallback to browser and log
-    console.log(`[ASR] Bhashini engine configured for ${lang}, but using browser fallback for demo. Set NEXT_PUBLIC_ASR_ENGINE=browser for now.`);
-  }
+  let stopped = false;
+  let recorder: MediaRecorder | null = null;
+  let chunks: Blob[] = [];
+  let stream: MediaStream | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let finished = false;
 
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    onEnd();
+  };
+
+  const upload = async () => {
+    try {
+      const blob = new Blob(chunks, { type: chunks[0]?.type || "audio/webm" });
+      if (blob.size < 1200) {
+        // too small — probably tapped by accident; treat as silence
+        finish();
+        return;
+      }
+      const form = new FormData();
+      form.append("audio", blob, "answer.webm");
+      form.append("language", lang);
+      const res = await fetch("/api/bhashini/asr", { method: "POST", body: form });
+      if (!res.ok) throw new Error(`ASR ${res.status}`);
+      const data = await res.json();
+      const text = (data?.text ?? "").trim();
+      if (text) onText(text, true);
+    } catch (e) {
+      console.warn("Server ASR failed:", e);
+    } finally {
+      finish();
+    }
+  };
+
+  const begin = async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (ev) => {
+        if (ev.data.size > 0) chunks.push(ev.data);
+      };
+      recorder.onstop = () => {
+        stream?.getTracks().forEach((tr) => tr.stop());
+        void upload();
+      };
+      recorder.start();
+      timer = setTimeout(() => {
+        if (!stopped && recorder && recorder.state === "recording") recorder.stop();
+      }, MAX_RECORD_MS);
+    } catch (e) {
+      console.warn("Microphone unavailable, falling back to browser ASR:", e);
+      startBrowserRecognition(lang, onText, finish);
+    }
+  };
+
+  void begin();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (recorder && recorder.state === "recording") {
+      recorder.stop(); // onstop → upload → onEnd
+    } else if (!recorder) {
+      // never started (or mic denied path already handled)
+      finish();
+    }
+  };
+}
+
+/**
+ * ENGINE 2 — Browser Web Speech API (offline fallback).
+ */
+function startBrowserRecognition(
+  lang: Lang,
+  onText: (text: string, final: boolean) => void,
+  onEnd: () => void,
+): () => void {
   const Ctor = getCtor();
   if (!Ctor) {
     onEnd();
@@ -168,22 +199,42 @@ export function startRecognition(
 }
 
 /**
+ * Main recognition — tries the server engine first (Bhashini/Groq Whisper,
+ * works in EVERY browser and handles noisy OPD audio), and automatically
+ * falls back to the browser engine when the server has no ASR keys or the
+ * microphone path fails. Same signature as before → zero UI changes.
+ */
+export function startRecognition(
+  lang: Lang,
+  onText: (text: string, final: boolean) => void,
+  onEnd: () => void,
+): () => void {
+  let stopFn: (() => void) | null = null;
+  let done = false;
+
+  const choose = async () => {
+    const useServer = await probeServerAsr();
+    if (done) return;
+    stopFn = useServer
+      ? startServerRecognition(lang, onText, onEnd)
+      : startBrowserRecognition(lang, onText, onEnd);
+  };
+  void choose();
+
+  return () => {
+    done = true;
+    stopFn?.();
+  };
+}
+
+/**
  * Architecture Note for Jury / SIH:
- * 
- * Current Implementation (Demo):
- * - Browser Web Speech API (webkitSpeechRecognition)
- * - Supports 7 languages: en-IN, hi-IN, ta-IN, te-IN, bn-IN, mr-IN, kn-IN
- * - Works offline, no API key needed, icon-driven + audio prompts
- * 
- * Production Roadmap (Zero UI change):
- * - Replace startRecognition() internals with Bhashini ASR:
- *   MediaRecorder → WAV → Bhashini API → transcript
- * - Bhashini advantages: 
- *   - Trained on Indian accents, noisy hospital environments
- *   - Better for low-literacy, elderly, code-mixed Hindi+English
- *   - Government approved, DPDP compliant
- * - AI4Bharat Conformer as alternative
- * 
- * This pluggable design satisfies "Multilingual, multi-accent voice capture in noisy hospital"
- * requirement while keeping demo functional without API keys.
+ *
+ * Live Implementation:
+ * - Engine 1: MediaRecorder → /api/bhashini/asr → Bhashini ULCA (Govt of
+ *   India — trained on Indian accents, noisy hospital audio, optional
+ *   translation) with Groq Whisper (whisper-large-v3) as automatic backup.
+ *   Server-side keys never touch the browser.
+ * - Engine 2: Browser Web Speech API fallback (offline, no key).
+ * - The kiosk UI and inputMode tracking ("voice" vs "touch") work unchanged.
  */
