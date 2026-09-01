@@ -14,6 +14,7 @@ import {
 import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
 import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
+import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
 import {
@@ -218,6 +219,49 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       () => setListening(false),
     );
   }
+
+    // ── Aadhaar card scan (photo → OCR → auto-fill) ──────────────────────
+  const aadhaarScanRef = useRef<HTMLInputElement | null>(null);
+  const [aadhaarScan, setAadhaarScan] = useState<{ busy: boolean; msg: string; ok: boolean }>({
+    busy: false,
+    msg: "",
+    ok: false,
+  });
+
+  async function handleAadhaarScan(file: File) {
+    if (!isValidDocumentFile(file)) {
+      setAadhaarScan({ busy: false, msg: "Please use a JPG/PNG photo of the card", ok: false });
+      return;
+    }
+    setAadhaarScan({ busy: true, msg: "📖 Reading card…", ok: false });
+    try {
+      const result = await performOCR(file, (p) =>
+        setAadhaarScan({ busy: true, msg: `📖 Reading card… ${Math.round(p)}%`, ok: false }),
+      );
+      const parsed = parseAadhaarText(result.text);
+      if (!parsed.ok) {
+        setAadhaarScan({ busy: false, msg: `⚠️ ${parsed.error ?? "Could not read the card"}`, ok: false });
+        return;
+      }
+      setForm((f) => ({
+        ...f,
+        aadhaarLast4: parsed.last4 ?? f.aadhaarLast4,
+        fullName: f.fullName || parsed.fullName || "",
+        age: f.age || parsed.age || "",
+        gender: parsed.gender ?? f.gender,
+      }));
+      setAadhaarScan({
+        busy: false,
+        ok: true,
+        msg: `✅ Aadhaar read: ${parsed.masked}${parsed.fullName ? ` — ${parsed.fullName}` : ""}${
+          parsed.age ? `, age ${parsed.age}` : ""
+        }`,
+      });
+    } catch {
+      setAadhaarScan({ busy: false, msg: "⚠️ Scan failed — try again or type the details", ok: false });
+    }
+  }
+
 
   // Ensure local profile is synced so "View Full Portal" doesn't fail
   function handleGoToPortal() {
@@ -673,13 +717,42 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     placeholder="12-3456-7890-1234"
                   />
                 )}
-                {identifyTab === "aadhaar" && (
-                  <Field
-                    label={t("last4", lang)}
-                    value={form.aadhaarLast4}
-                    onChange={(v) => setForm({ ...form, aadhaarLast4: v.replace(/\D/g, "").slice(0, 4) })}
-                    placeholder="8821"
-                  />
+                                {identifyTab === "aadhaar" && (
+                  <div className="grid gap-2">
+                    <Field
+                      label={t("last4", lang)}
+                      value={form.aadhaarLast4}
+                      onChange={(v) => setForm({ ...form, aadhaarLast4: v.replace(/\D/g, "").slice(0, 4) })}
+                      placeholder="8821"
+                    />
+                    <div>
+                      <input
+                        ref={aadhaarScanRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = "";
+                          if (f) void handleAadhaarScan(f);
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={aadhaarScan.busy}
+                        onClick={() => aadhaarScanRef.current?.click()}
+                        className="w-full rounded-2xl border border-dashed border-[#0f5c61]/50 bg-[#dceee8] px-4 py-3 text-sm font-semibold text-[#0f5c61] disabled:opacity-60"
+                      >
+                        📷 {aadhaarScan.busy ? aadhaarScan.msg : "Scan Aadhaar card (auto-fills name, age, gender)"}
+                      </button>
+                      {!aadhaarScan.busy && aadhaarScan.msg && (
+                        <p className={`mt-2 text-sm ${aadhaarScan.ok ? "text-[#0f5c61]" : "text-[#b42318]"}`}>
+                          {aadhaarScan.msg}
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 )}
                 <Field label={t("fullName", lang)} value={form.fullName} onChange={(v) => setForm({ ...form, fullName: v })} />
                 <div className="grid grid-cols-2 gap-3">
