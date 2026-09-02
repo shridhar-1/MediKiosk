@@ -13,6 +13,17 @@ import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+const INDIC_SCRIPT: Record<string, RegExp> = {
+  hi: /[\u0900-\u097F]/, mr: /[\u0900-\u097F]/,
+  bn: /[\u0980-\u09FF]/, ta: /[\u0B80-\u0BFF]/, te: /[\u0C00-\u0C7F]/,
+  kn: /[\u0C80-\u0CFF]/, ml: /[\u0D00-\u0D7F]/, gu: /[\u0A80-\u0AFF]/,
+  pa: /[\u0A00-\u0A7F]/, ur: /[\u0600-\u06FF]/,
+};
+function isLikelyHallucination(language: string, text: string): boolean {
+  const script = INDIC_SCRIPT[language];
+  if (!script) return false;
+  return !script.test(text);
+}
 
 export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type") ?? "";
@@ -84,6 +95,12 @@ export async function POST(req: NextRequest) {
           groqForm.append("language", language);
         }
         groqForm.append("temperature", "0");
+                if (language === "en") {
+          groqForm.append(
+            "prompt",
+            "Patient describing symptoms at a hospital kiosk: fever, cough, cold, headache, body pain, vomiting, loose motion, chest pain, breathing difficulty.",
+          );
+        }
         groqForm.append(
           "prompt",
           "Patient describing symptoms at a hospital kiosk: fever, cough, cold, headache, body pain, vomiting, loose motion, chest pain, breathing difficulty, since how many days.",
@@ -95,10 +112,11 @@ export async function POST(req: NextRequest) {
           headers: { Authorization: `Bearer ${groqKey}` },
           body: groqForm,
         });
-        const data = await res.json();
-        if (data.text) {
+         const data = await res.json();
+        const heardText = (data?.text ?? "").trim();
+        if (heardText && !isLikelyHallucination(language, heardText)) {
           return Response.json({
-            text: data.text,
+            text: heardText,
             confidence: 0.9,
             mode: "LIVE_GROQ_WHISPER",
             language,
