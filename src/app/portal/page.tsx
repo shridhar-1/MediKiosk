@@ -8,6 +8,68 @@ import {
   Clock, ShieldCheck, ChevronDown, ChevronUp 
 } from "lucide-react";
 
+
+// ── 🔊 Read-aloud button (browser speech — free, offline, no API key) ──────
+function SpeakButton({ text, language }: { text: string; language?: string | null }) {
+  const [speaking, setSpeaking] = useState(false);
+
+  function toggle() {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const u = new SpeechSynthesisUtterance(text);
+    const map: Record<string, string> = {
+      en: "en-IN",
+      hi: "hi-IN",
+      kn: "kn-IN",
+      ta: "ta-IN",
+      te: "te-IN",
+      bn: "bn-IN",
+      mr: "mr-IN",
+    };
+
+    const tag = map[language ?? "en"] ?? "en-IN";
+    u.lang = tag;
+
+    const voices = window.speechSynthesis.getVoices();
+    const match =
+      voices.find((v) => v.lang?.toLowerCase() === tag.toLowerCase()) ??
+      voices.find((v) =>
+        v.lang?.toLowerCase().startsWith(tag.slice(0, 2).toLowerCase())
+      );
+
+    if (match) u.voice = match;
+
+    u.rate = 0.92;
+    u.onend = () => setSpeaking(false);
+    u.onerror = () => setSpeaking(false);
+
+    setSpeaking(true);
+    window.speechSynthesis.speak(u);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className={`mt-2 inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold ${
+        speaking
+          ? "bg-[#b42318] text-white"
+          : "bg-[#0f5c61] text-white"
+      }`}
+    >
+      {speaking ? "⏹ Stop" : "🔊 Listen to this advice"}
+    </button>
+  );
+}
+
 export default function PatientPortalPage() {
   const router = useRouter();
   const [patientProfile, setPatientProfile] = useState<any>(null);
@@ -241,15 +303,21 @@ export default function PatientPortalPage() {
                               {summary?.status === "confirmed" ? " — confirmed to your hospital record." : "."}
                             </p>
                             {summary?.patientAdvice ? (
-                              <p className="mt-2 rounded-xl border border-teal-200 bg-white p-3 text-gray-800">
-                                <b>Advice for you:</b> {summary.patientAdvice}
-                              </p>
-                            ) : (
-                              <p className="mt-1 text-xs text-[#4a4338]">
-                                The doctor did not write separate advice for this visit.
-                              </p>
-                            )}
-                          </>
+  <div className="mt-2 rounded-xl border border-teal-200 bg-white p-3 text-gray-800">
+    <p>
+      <b>Advice for you:</b> {summary.patientAdvice}
+    </p>
+    <SpeakButton
+      text={`Advice for you. ${summary.patientAdvice}`}
+      language={item.patient?.preferredLanguage ?? "en"}
+    />
+  </div>
+) : (
+        <p className="mt-1 text-xs text-[#4a4338]">
+         The doctor did not write separate advice for this visit.
+            </p>
+             )}
+                 </>
                         ) : (
                           <p className="mt-1.5 text-sm text-[#4a4338]">
                             ⏳ Awaiting review — the doctor will read this history during your consultation
@@ -280,6 +348,7 @@ export default function PatientPortalPage() {
                       ) : (
                         <p className="text-gray-500 italic">No summary details available for this session.</p>
                       )}
+                      
 
                       <div className="pt-2 border-t text-xs text-[#4a4338]">
                         Opened by the treating physician on the hospital console. You can review or delete this submission here.
