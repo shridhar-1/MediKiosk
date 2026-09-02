@@ -44,6 +44,18 @@ export default async function PhysicianQueuePage() {
   const done = rows.filter((r) => r.session.status === "reviewed");
   const emergencies = waiting.filter((r) => r.session.priority === "emergency");
 
+  // ── Deterministic OPD analytics (SQL data, never LLM-invented) ──────────
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const today = rows.filter((r) => new Date(r.session.startedAt) >= startOfDay);
+  const redFlagged = rows.filter((r) => r.session.redFlagTriggered);
+  const aiSummaries = rows.filter((r) => r.summary?.aiUsed);
+  const templateSummaries = rows.filter((r) => r.summary && !r.summary.aiUsed);
+  const ayushSessions = rows.filter((r) => r.session.mode === "ayush");
+  const byDept = new Map<string, number>();
+  for (const r of rows) byDept.set(r.session.department, (byDept.get(r.session.department) ?? 0) + 1);
+  const topDepts = [...byDept.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+
   return (
     <div className="min-h-screen">
       <PhysicianNav member={member} />
@@ -56,22 +68,44 @@ export default async function PhysicianQueuePage() {
               Histories arrive before the patient. Confirm, amend, or send back. Red flags skip the ordinary queue.
             </p>
           </div>
-                    <div className="flex flex-col items-end gap-3">
+          <div className="flex flex-col items-end gap-3">
             <LiveAlerts />
-            <dl className="grid grid-cols-3 gap-4 text-sm">
-              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-                <dt className="text-[#4a4338]">Waiting</dt>
+            <dl className="grid grid-cols-3 gap-3 text-sm sm:grid-cols-6">
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]">Today</dt>
+                <dd className="serif text-2xl">{today.length}</dd>
+              </div>
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]">Waiting</dt>
                 <dd className="serif text-2xl">{waiting.length}</dd>
               </div>
-              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-                <dt className="text-[#4a4338]">Emergency</dt>
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]">Emergency</dt>
                 <dd className="serif text-2xl text-[#b42318]">{emergencies.length}</dd>
               </div>
-              <div className="rounded-2xl bg-[#fffdf7] px-4 py-3 ring-1 ring-[#1b1712]/8">
-                <dt className="text-[#4a4338]">Confirmed</dt>
-                <dd className="serif text-2xl">{done.length}</dd>
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]">Red flags</dt>
+                <dd className="serif text-2xl text-[#c9842a]">{redFlagged.length}</dd>
+              </div>
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]" title="Engine transparency: AI-written vs rule-based template">
+                  AI / Template
+                </dt>
+                <dd className="serif text-2xl">
+                  {aiSummaries.length}
+                  <span className="text-sm text-[#4a4338]"> / {templateSummaries.length}</span>
+                </dd>
+              </div>
+              <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
+                <dt className="text-xs text-[#4a4338]">AYUSH mode</dt>
+                <dd className="serif text-2xl">{ayushSessions.length}</dd>
               </div>
             </dl>
+            {topDepts.length > 0 && (
+              <p className="text-xs text-[#4a4338]">
+                Top departments: {topDepts.map(([d, n]) => `${deptLabel(d)} (${n})`).join(" · ")}
+              </p>
+            )}
           </div>
         </div>
 

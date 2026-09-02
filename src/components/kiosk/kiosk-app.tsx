@@ -14,6 +14,7 @@ import {
 import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
 import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
+import { classifyUtterance } from "@/lib/utterance-guard";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
@@ -358,9 +359,17 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         return;
       }
     }
-    if (question.type === "text" && !question.optional && !next.text.trim() && !next.values.length) {
+        if (question.type === "text" && !question.optional && !next.text.trim() && !next.values.length) {
       setError("Please tell us a little more.");
       return;
+    }
+    // ── UTTERANCE GUARD (deterministic intent check, no LLM) ──────────────
+    if (question.type === "text" && !question.optional && next.text.trim() && !next.values.length) {
+      const check = classifyUtterance(next.text);
+      if (!check.relevant) {
+        setError(check.hint ?? "Please describe your health problem.");
+        return;
+      }
     }
     setError("");
     stopMic();
