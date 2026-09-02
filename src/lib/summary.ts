@@ -216,6 +216,11 @@ export function generateSummaryFields(
   investigationsSummary: string;
   medicationsExtracted: string;
 } {
+    const ayush = mode === "ayush" ? buildAyush(answers) : null;
+  if (ayush && !ayush.vaya) {
+    const stage = patient.age <= 16 ? "Balya (child)" : patient.age >= 60 ? "Vriddha (elderly)" : "Madhyama (adult)";
+    ayush.vaya = `${patient.age} years — ${stage}`;
+  }
   return {
     chiefComplaint: `${complaintPhrase(answers)} ${durationPhrase(answers)}`,
     hpi: buildHpi(patient, answers),
@@ -226,7 +231,7 @@ export function generateSummaryFields(
     familyHistory: buildFamily(answers),
     personalHistory: buildPersonal(answers),
     reviewOfSystems: buildRos(answers),
-    ayushAssessment: mode === "ayush" ? buildAyush(answers) : null,
+    ayushAssessment: ayush,
     investigationsSummary,
     medicationsExtracted,
   };

@@ -24,6 +24,7 @@ const EDITABLE_FIELDS = [
   "investigationsSummary",
   "medicationsExtracted",
 ] as const;
+const EDITABLE_JSON_FIELDS = ["ayushAssessment"] as const;
 
 /**
  * POST /api/sessions/:id/summary
@@ -58,6 +59,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       reviewedBy?: string;
       physicianNotes?: string;
       patientAdvice?: string;
+            ayushAssessment?: Record<string, string> | null;
     };
     const [existing] = await db.select().from(clinicalSummaries).where(eq(clinicalSummaries.sessionId, id)).limit(1);
     if (!existing) {
@@ -76,6 +78,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     // Doctor's advice for the patient — visible in the patient portal
     if (body.patientAdvice !== undefined) {
       set.patientAdvice = body.patientAdvice;
+    }
+        // AYUSH: doctor may amend the Dashavidha Pariksha assessment (JSON object)
+    if (body.ayushAssessment !== undefined) {
+      set.ayushAssessment = body.ayushAssessment;
     }
     if (body.physicianNotes !== undefined || body.status === "confirmed") {
       await db
