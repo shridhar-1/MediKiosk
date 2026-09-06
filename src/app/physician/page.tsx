@@ -227,9 +227,29 @@ function QueueRow({
               AYUSH
             </span>
           )}
-          <span className="rounded-full bg-[#f6f0e4] px-2 py-0.5 text-[10px] uppercase tracking-wider">
-            {row.session.priority}
+                    <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+              row.session.priority === "emergency"
+                ? "bg-[#b42318] text-white"
+                : row.session.priority === "urgent"
+                  ? "bg-[#c9842a] text-white"
+                  : "bg-[#f6f0e4]"
+            }`}
+          >
+            {row.session.priority === "emergency"
+              ? "🚨 emergency"
+              : row.session.priority === "urgent"
+                ? "⚡ urgent"
+                : "routine"}
           </span>
+          {row.summary?.aiUsed && (
+            <span
+              className="rounded-full bg-[#e8d5a3] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#08363a]"
+              title={`Summary written by AI (${row.summary.engine ?? "ai"}), doctor-editable`}
+            >
+              ✨ AI
+            </span>
+          )}
         </div>
         <p className="mt-1 text-sm text-[#1b1712]">{row.summary?.chiefComplaint ?? "Interview in progress"}</p>
         <p className="mt-1 text-xs text-[#4a4338]">

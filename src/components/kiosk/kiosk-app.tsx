@@ -52,6 +52,8 @@ import { useRouter } from "next/navigation";
 
 type Ans = { values: string[]; text: string; inputMode: InputMode };
 type Summary = {
+    aiUsed?: boolean;
+  engine?: string | null;
   chiefComplaint: string;
   hpi: string;
   pastMedical: string;
@@ -1397,6 +1399,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 <p className="mt-3 text-sm text-[#4a4338]">
                   {DEPARTMENTS.find((d) => d.id === department)?.label} · {mode}
                 </p>
+                                {summary && (
+                  <p className="mt-3 inline-block rounded-full bg-[#f6f0e4] px-3 py-1 text-[11px] font-semibold text-[#08363a]">
+                    {summary.aiUsed ? `✨ AI summary ready for the doctor (${summary.engine ?? "ai"})` : "📋 Summary ready for the doctor"}
+                  </p>
+                )}
                 {location === "home" ? <ScheduleSlotBox /> : <QueuePosition token={token} />}
                 {flags?.triggered && (
                   <p className="mt-4 rounded-full bg-[#b42318] px-3 py-1 text-xs font-semibold text-white">

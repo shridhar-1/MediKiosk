@@ -343,6 +343,11 @@ export default function PatientPortalPage() {
                               Emergency
                             </span>
                           )}
+                                                    {item.summary?.aiUsed && (
+                            <span className="text-xs uppercase bg-[#e8d5a3] text-[#08363a] px-2 py-0.5 rounded font-bold">
+                              ✨ AI
+                            </span>
+                          )}
                           {summary?.status === "confirmed" || item.reviewedBy ? (
                             <span className="text-xs uppercase bg-green-100 text-green-800 px-2 py-0.5 rounded font-bold">
                               ✅ Doctor reviewed

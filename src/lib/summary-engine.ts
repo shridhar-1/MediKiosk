@@ -10,6 +10,7 @@ import type { AyushAssessment } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { summarizeDocuments } from "@/lib/ocr";
 import { evaluateRedFlags, withPatientCancellation } from "@/lib/redflags";
+import { engineOrder } from "@/lib/ai-router";
 import { answersMap } from "@/lib/session-data";
 import { generateSummaryFields } from "@/lib/summary";
 import { eq } from "drizzle-orm";
@@ -315,18 +316,8 @@ async function generateWithGroq(
 }
 
 function resolveEngine(): { order: ("ollama" | "groq" | "gemini")[] } {
-  const choice = (process.env.AI_ENGINE || "auto").toLowerCase();
-  if (choice === "ollama") return { order: ["ollama"] };
-  if (choice === "groq") return { order: ["groq", "gemini"] };
-  if (choice === "gemini") return { order: ["gemini"] };
-  if (process.env.VERCEL || process.env.NODE_ENV === "production") {
-    return process.env.GROQ_API_KEY
-      ? { order: ["groq", "gemini"] }
-      : process.env.GEMINI_API_KEY
-        ? { order: ["gemini"] }
-        : { order: ["groq", "gemini"] };
-  }
-  return { order: ["ollama", "groq", "gemini"] };
+  // AI lanes: per-task engine priority (see src/lib/ai-router.ts)
+  return { order: engineOrder("summary") };
 }
 
 async function generateWithAI(input: AIInput): Promise<{
