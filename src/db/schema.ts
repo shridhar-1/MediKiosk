@@ -66,6 +66,8 @@ export const sessions = pgTable("sessions", {
   calledAt: timestamp("called_at", { mode: "date" }),
   expiresAt: timestamp("expires_at", { mode: "date" }),
   scheduledAt: timestamp("scheduled_at", { mode: "date" }),
+    // Set when the patient says "not an emergency" on the kiosk lock screen.
+  emergencyCancelledAt: timestamp("emergency_cancelled_at", { mode: "date" }),
   reviewedAt: timestamp("reviewed_at", { mode: "date" }),
   reviewedBy: text("reviewed_by"),
 });

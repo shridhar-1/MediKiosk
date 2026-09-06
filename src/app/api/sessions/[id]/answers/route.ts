@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { historyResponses, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
-import { evaluateRedFlags, evaluateRedFlagsFromText, mergeRedFlagResults } from "@/lib/redflags";
+import { evaluateRedFlags, evaluateRedFlagsFromText, mergeRedFlagResults, withPatientCancellation } from "@/lib/redflags";
 import { answersMap } from "@/lib/session-data";
 import { and, eq } from "drizzle-orm";
 
@@ -68,8 +68,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       return [r.answerText, json?.text ?? ""].join(" ");
     })
     .join(" ");
-  const spoken = evaluateRedFlagsFromText(transcript);
-  const flags = mergeRedFlagResults(structured, spoken);
+   const spoken = evaluateRedFlagsFromText(transcript);
+  // Respect a patient false-alarm cancel: emergency → urgent, note kept
+  const [sess] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+  const flags = withPatientCancellation(sess?.emergencyCancelledAt, mergeRedFlagResults(structured, spoken));
 
   await db
     .update(sessions)

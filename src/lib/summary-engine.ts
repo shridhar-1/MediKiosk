@@ -9,7 +9,7 @@ import {
 import type { AyushAssessment } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { summarizeDocuments } from "@/lib/ocr";
-import { evaluateRedFlags } from "@/lib/redflags";
+import { evaluateRedFlags, withPatientCancellation } from "@/lib/redflags";
 import { answersMap } from "@/lib/session-data";
 import { generateSummaryFields } from "@/lib/summary";
 import { eq } from "drizzle-orm";
@@ -367,8 +367,10 @@ export async function generateSummaryForSession(sessionId: string): Promise<{
   if (!patient) throw new Error("Patient missing");
   const answerRows = await db.select().from(historyResponses).where(eq(historyResponses.sessionId, sessionId));
   const docs = await db.select().from(documents).where(eq(documents.sessionId, sessionId));
-  const map = answersMap(answerRows);
-  const flags = evaluateRedFlags(map);
+    const map = answersMap(answerRows);
+  // Emergency may have been cancelled by the patient at the kiosk (false
+  // alarm, two-tap confirm) — respect it: urgent, never silent, doctor sees.
+  const flags = withPatientCancellation(session.emergencyCancelledAt, evaluateRedFlags(map));
   const { investigationsSummary, medicationsExtracted } = summarizeDocuments(docs);
   const localFields = generateSummaryFields(
     patient,

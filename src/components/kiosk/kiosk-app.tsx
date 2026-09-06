@@ -158,6 +158,9 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [flags, setFlags] = useState<{ triggered: boolean; priority: string; reasons: string[] } | null>(null);
+  // True while the patient is confirming "this is NOT an emergency" on the
+  // lock screen (false-alarm escape hatch, two-tap confirm).
+  const [cancellingEmergency, setCancellingEmergency] = useState(false);
   const stopRef = useRef<(() => void) | null>(null);
 
   const question = questionById(qid);
@@ -515,6 +518,29 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     }
     stopMic();
     stopSpeaking();
+  }
+
+  // False-alarm escape: patient confirmed "not an emergency". The server
+  // records the cancellation (the doctor still sees it) and downgrades the
+  // priority to urgent — the lock screen closes and the interview continues.
+  async function cancelEmergencyFlag() {
+    if (!sessionId) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/cancel-emergency`, { method: "POST" });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        flags?: { triggered: boolean; priority: string; reasons: string[] };
+        error?: string;
+      };
+      if (!res.ok || !data.flags) throw new Error(data.error || "Could not cancel");
+      setFlags(data.flags);
+      setCancellingEmergency(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function buildSummary() {
@@ -974,6 +1000,45 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                       End Session & Alert Triage Desk
                     </button>
                   </div>
+
+                  {/* ── False-alarm escape hatch (two-tap confirm) ─────── */}
+                  {!cancellingEmergency ? (
+                    <button
+                      type="button"
+                      onClick={() => setCancellingEmergency(true)}
+                      className="text-sm text-white/70 underline underline-offset-4 transition hover:text-white"
+                    >
+                      This is a mistake — I do not have these symptoms now
+                    </button>
+                  ) : (
+                    <div className="mx-auto max-w-md rounded-2xl bg-white/10 p-4 text-left space-y-3">
+                      <p className="text-sm font-semibold">Are you sure this is not an emergency?</p>
+                      <p className="text-xs text-white/85">
+                        If you have chest pain, breathing trouble, heavy bleeding, or fainting RIGHT
+                        NOW, please stop and alert the hospital staff.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void cancelEmergencyFlag()}
+                          disabled={busy}
+                          className="rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#08363a] transition hover:bg-gray-100 disabled:opacity-60"
+                        >
+                          {busy ? "Saving…" : "Yes — continue my questionnaire"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCancellingEmergency(false)}
+                          className="rounded-full bg-black/25 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-black/40"
+                        >
+                          No — it is an emergency
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-white/60">
+                        Your doctor will still see this alert and double-check you.
+                      </p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -1371,6 +1436,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     setDocs([]);
                     setSummary(null);
                     setFlags(null);
+                    setCancellingEmergency(false);
                     setError("");
                     setPaste("");
                     setPastSubmissions([]);

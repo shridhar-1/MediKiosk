@@ -399,3 +399,27 @@ function reconcile(fired: FiredRule[]): RedFlagResult {
     fired,
   };
 }
+/* ── Patient false-alarm escape hatch ─────────────────────────────────────
+ * The kiosk lock screen lets the patient say "this is NOT an emergency"
+ * (two-tap confirm). Safety contract:
+ *   - priority downgrades to URGENT for the rest of the session (the same
+ *     answers never re-lock the screen)
+ *   - the flag stays ON and a visible note is prepended — the doctor ALWAYS
+ *     sees what the patient cancelled. Never silent. */
+export const PATIENT_CANCELLED_NOTE =
+  "Patient told the kiosk this is NOT an emergency — doctor please verify";
+
+export function withPatientCancellation(
+  cancelledAt: Date | string | null | undefined,
+  flags: RedFlagResult,
+): RedFlagResult {
+  if (!cancelledAt) return flags;
+  if (flags.priority !== "emergency") return flags;
+  return {
+    ...flags,
+    priority: "urgent",
+    reasons: flags.reasons.includes(PATIENT_CANCELLED_NOTE)
+      ? flags.reasons
+      : [PATIENT_CANCELLED_NOTE, ...flags.reasons],
+  };
+}
