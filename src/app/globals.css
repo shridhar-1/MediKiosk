@@ -119,3 +119,16 @@ body::before {
 .rise {
   animation: rise 0.45s ease both;
 }
+/* AI hero — scanning shimmer sweeping down the prescription photo */
+@keyframes scanline {
+  0% {
+    top: -20%;
+  }
+  100% {
+    top: 110%;
+  }
+}
+
+.scanline {
+  animation: scanline 1.2s linear infinite;
+}
