@@ -3,6 +3,7 @@ import Image from "next/image";
 import { BrandMark } from "@/components/brand";
 import { AiHero } from "@/components/home/ai-hero";
 import { AiSummaryCard } from "@/components/home/ai-summary-card";
+import { DemoLoginButton } from "@/components/auth/demo-login-button";
 import { HeartPulse, Stethoscope } from "lucide-react";
 import { seedIfEmpty } from "@/lib/seed";
 
@@ -58,6 +59,33 @@ export default async function Home() {
         <div className="mt-5">
           <AiSummaryCard />
         </div>
+                <div className="mt-5">
+          <AiSummaryCard />
+        </div>
+
+        {/* ── ONE-TAP INSTANT DEMO — judges never hunt for a login ───────── */}
+        <div className="mt-12 rounded-[26px] bg-[#f6f0e4]/10 p-5 text-center ring-1 ring-[#f6f0e4]/20">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-[#e8d5a3]">
+            Judges &amp; evaluators — try the real product now
+          </p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            <DemoLoginButton
+              role="patient"
+              label="Instant demo — be a patient in 4 seconds"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#e8d5a3] px-7 py-4 text-base font-bold text-[#08363a] shadow-lg transition hover:bg-white disabled:opacity-60 sm:w-auto"
+            />
+            <DemoLoginButton
+              role="staff"
+              label="Open the doctor console"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#0f5c61] px-7 py-4 text-base font-semibold text-white ring-1 ring-white/25 transition hover:bg-[#0a4549] disabled:opacity-60 sm:w-auto"
+            />
+          </div>
+          <p className="mt-3 text-xs text-[#f6f0e4]/60">
+            No OTP · no password · no signup. One tap and you are inside the live product.
+          </p>
+        </div>
+
+        {/* ── portals (secondary now — the hero sells first) ─────────────── */}
 
         {/* ── portals (secondary now — the hero sells first) ─────────────── */}
           <AiHero />
