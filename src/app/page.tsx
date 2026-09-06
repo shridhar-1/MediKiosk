@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { BrandMark } from "@/components/brand";
 import { AiHero } from "@/components/home/ai-hero";
+import { AiSummaryCard } from "@/components/home/ai-summary-card";
 import { HeartPulse, Stethoscope } from "lucide-react";
 import { seedIfEmpty } from "@/lib/seed";
 
@@ -46,6 +47,19 @@ export default async function Home() {
         </p>
 
         <div className="mt-10">
+                  <div className="mt-10">
+          <AiHero />
+        </div>
+
+        {/* ── THE ARTIFACT — what the doctor receives ────────────────────── */}
+        <p className="mt-16 text-center text-[11px] uppercase tracking-[0.24em] text-[#f6f0e4]/50">
+          Before the patient sits down, the doctor already has this
+        </p>
+        <div className="mt-5">
+          <AiSummaryCard />
+        </div>
+
+        {/* ── portals (secondary now — the hero sells first) ─────────────── */}
           <AiHero />
         </div>
 
