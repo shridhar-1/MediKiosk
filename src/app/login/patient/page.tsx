@@ -1,4 +1,5 @@
 import { AuthShell } from "@/components/auth/auth-shell";
+import { DemoLoginButton } from "@/components/auth/demo-login-button";
 import PhoneAuth from "@/components/PhoneAuth";
 import { seedIfEmpty } from "@/lib/seed";
 
@@ -25,7 +26,13 @@ export default async function PatientLoginPage() {
       swapHref="/login/staff"
       swapLabel="Hospital staff? Sign in to the clinical console &rarr;"
     >
-      <PhoneAuth />
+            <PhoneAuth />
+      <div className="mt-4">
+        <DemoLoginButton role="patient" />
+        <p className="mt-1.5 text-center text-[11px] text-[#4a4338]/70">
+          Evaluators: one click — no OTP needed. Your visits stay in the demo patient&rsquo;s history.
+        </p>
+      </div>
     </AuthShell>
   );
 }

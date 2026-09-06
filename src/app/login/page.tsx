@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import { DemoLoginButton } from "@/components/auth/demo-login-button";
 import { BrandMark } from "@/components/brand";
 import { HeartPulse, Stethoscope } from "lucide-react";
 import { seedIfEmpty } from "@/lib/seed";
@@ -61,7 +62,29 @@ export default async function LoginChooser() {
                 <span className="mt-4 inline-block text-sm font-medium text-[#0f5c61]">Continue →</span>
               </div>
             </Link>
-          ))}
+                    ))}
+        </div>
+
+        {/* Evaluator fast lane */}
+        <div className="mt-8 rounded-[26px] bg-[#f6f0e4]/10 p-5 ring-1 ring-[#f6f0e4]/20">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-[#e8d5a3]">
+            Evaluator fast lane — one click, no OTP
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <DemoLoginButton
+              role="patient"
+              label="⚡ Enter as demo patient → kiosk"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#f6f0e4] px-5 py-3 text-sm font-semibold text-[#08363a] transition hover:bg-white disabled:opacity-60"
+            />
+            <DemoLoginButton
+              role="staff"
+              label="⚡ Enter as demo doctor → console"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#0f5c61] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#0a4549] disabled:opacity-60"
+            />
+          </div>
+          <p className="mt-2 text-xs text-[#f6f0e4]/60">
+            Real OTP login still works below — the fast lane just makes evaluation quick.
+          </p>
         </div>
       </div>
     </main>
