@@ -3,72 +3,11 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { 
-  PlusCircle, Trash2, Calendar, FileText, User, 
-  Clock, ShieldCheck, ChevronDown, ChevronUp 
+import {
+  PlusCircle, Trash2, Calendar, FileText, User,
+  Clock, ShieldCheck, ArrowRight, Activity, ChevronDown, ChevronUp
 } from "lucide-react";
-
-
-// ── 🔊 Read-aloud button (browser speech — free, offline, no API key) ──────
-function SpeakButton({ text, language }: { text: string; language?: string | null }) {
-  const [speaking, setSpeaking] = useState(false);
-
-  function toggle() {
-    if (typeof window === "undefined" || !window.speechSynthesis) return;
-
-    if (speaking) {
-      window.speechSynthesis.cancel();
-      setSpeaking(false);
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    const u = new SpeechSynthesisUtterance(text);
-    const map: Record<string, string> = {
-      en: "en-IN",
-      hi: "hi-IN",
-      kn: "kn-IN",
-      ta: "ta-IN",
-      te: "te-IN",
-      bn: "bn-IN",
-      mr: "mr-IN",
-    };
-
-    const tag = map[language ?? "en"] ?? "en-IN";
-    u.lang = tag;
-
-    const voices = window.speechSynthesis.getVoices();
-    const match =
-      voices.find((v) => v.lang?.toLowerCase() === tag.toLowerCase()) ??
-      voices.find((v) =>
-        v.lang?.toLowerCase().startsWith(tag.slice(0, 2).toLowerCase())
-      );
-
-    if (match) u.voice = match;
-
-    u.rate = 0.92;
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
-
-    setSpeaking(true);
-    window.speechSynthesis.speak(u);
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={toggle}
-      className={`mt-2 inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold ${
-        speaking
-          ? "bg-[#b42318] text-white"
-          : "bg-[#0f5c61] text-white"
-      }`}
-    >
-      {speaking ? "⏹ Stop" : "🔊 Listen to this advice"}
-    </button>
-  );
-}
+import { arriveByTime, formatClockTime } from "@/lib/queue";
 
 export default function PatientPortalPage() {
   const router = useRouter();
@@ -76,6 +15,69 @@ export default function PatientPortalPage() {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [liveQueue, setLiveQueue] = useState<{ token: string; ahead: number; arriveBy: string } | null>(null);
+  const [expiredToken, setExpiredToken] = useState<string | null>(null);
+
+  // ── LIVE QUEUE STATUS + TOKEN EXPIRY ───────────────────────────────────
+  // Finds the patient's active (waiting) token and polls /api/queue every
+  // 30s. If the token expired (patient missed the arrive-by time + grace),
+  // shows a clear "take a new token" card instead.
+  useEffect(() => {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const expired = submissions.find(
+      (s) =>
+        s.status === "expired" &&
+        s.tokenNumber &&
+        new Date(s.submittedAt ?? s.startedAt ?? 0) >= startOfDay,
+    );
+    if (expired) {
+      setExpiredToken(expired.tokenNumber);
+      setLiveQueue(null);
+      return;
+    }
+    setExpiredToken(null);
+
+    const active = submissions.find(
+      (s) => (s.status === "submitted" || s.status === "summary") && s.tokenNumber,
+    );
+    if (!active) {
+      setLiveQueue(null);
+      return;
+    }
+    let alive = true;
+    async function poll() {
+      try {
+        const res = await fetch("/api/queue", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!alive) return;
+        const idx = (data.queue ?? []).findIndex(
+          (q: any) => q.tokenNumber === active.tokenNumber,
+        );
+        if (data.nowServing?.tokenNumber === active.tokenNumber) {
+          setLiveQueue({ token: active.tokenNumber, ahead: 0, arriveBy: "" });
+        } else if (idx >= 0) {
+          setLiveQueue({
+            token: active.tokenNumber,
+            ahead: idx,
+            arriveBy: formatClockTime(arriveByTime(idx)),
+          });
+        } else {
+          setLiveQueue(null);
+        }
+      } catch {
+        /* silent — portal works without live status */
+      }
+    }
+    void poll();
+    const timer = setInterval(poll, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [submissions]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -141,7 +143,7 @@ export default function PatientPortalPage() {
   return (
     <div className="min-h-screen bg-[#fffdf7] p-4 md:p-10">
       <div className="max-w-4xl mx-auto space-y-6">
-        
+
         {/* TOP BAR / BRANDING */}
         <div className="flex items-center justify-between border-b border-[#1b1712]/10 pb-4">
           <div>
@@ -183,6 +185,57 @@ export default function PatientPortalPage() {
             <PlusCircle className="h-5 w-5" /> Start New Kiosk Intake
           </Link>
         </div>
+
+        {/* LIVE QUEUE STATUS — token + when to be at the hospital */}
+        {expiredToken ? (
+          <div className="bg-[#fff5f3] border border-[#b42318]/30 rounded-2xl p-6 shadow-sm flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 rounded-full bg-[#b42318]/10 flex items-center justify-center">
+                <Clock className="h-7 w-7 text-[#b42318]" />
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[#b42318]">Token expired</p>
+                <h2 className="text-2xl font-bold text-[#b42318]">{expiredToken}</h2>
+                <p className="text-sm text-[#4a4338] mt-1">
+                  You were not present at your arrive-by time, so this token expired.
+                </p>
+              </div>
+            </div>
+            <Link
+              href="/kiosk"
+              className="inline-flex items-center gap-2 bg-[#b42318] text-white px-6 py-3 rounded-full font-semibold hover:bg-[#8f1c13] transition shadow-md"
+            >
+              <PlusCircle className="h-5 w-5" /> Take a new token
+            </Link>
+          </div>
+        ) : liveQueue && (
+          <div className="bg-gradient-to-r from-[#08363a] to-[#0f5c61] text-white rounded-2xl p-6 border border-[#08363a]/20 shadow-md flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 rounded-full bg-white/15 flex items-center justify-center">
+                <Clock className="h-7 w-7 text-[#e8d5a3]" />
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-[#e8d5a3]">Your token today</p>
+                <h2 className="text-2xl font-bold">{liveQueue.token}</h2>
+              </div>
+            </div>
+            <div className="text-right">
+              {liveQueue.ahead === 0 ? (
+                <p className="text-lg font-semibold animate-pulse">
+                  🔔 It is your turn — go to the consultation room now
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-white/80">
+                    {liveQueue.ahead} {liveQueue.ahead === 1 ? "patient" : "patients"} ahead of you
+                  </p>
+                  <p className="text-xl font-bold">Be at the hospital by {liveQueue.arriveBy}</p>
+                </>
+              )}
+              <p className="text-xs text-white/50 mt-1">Live — refreshes every 30 seconds</p>
+            </div>
+          </div>
+        )}
 
         {/* SUBMISSIONS LIST */}
         <div className="space-y-4">
@@ -303,21 +356,21 @@ export default function PatientPortalPage() {
                               {summary?.status === "confirmed" ? " — confirmed to your hospital record." : "."}
                             </p>
                             {summary?.patientAdvice ? (
-  <div className="mt-2 rounded-xl border border-teal-200 bg-white p-3 text-gray-800">
-    <p>
-      <b>Advice for you:</b> {summary.patientAdvice}
-    </p>
-    <SpeakButton
-      text={`Advice for you. ${summary.patientAdvice}`}
-      language={item.patient?.preferredLanguage ?? "en"}
-    />
-  </div>
-) : (
-        <p className="mt-1 text-xs text-[#4a4338]">
-         The doctor did not write separate advice for this visit.
-            </p>
-             )}
-                 </>
+                              <div className="mt-2 rounded-xl border border-teal-200 bg-white p-3 text-gray-800">
+                                <p>
+                                  <b>Advice for you:</b> {summary.patientAdvice}
+                                </p>
+                                <SpeakButton
+                                  text={`Advice for you. ${summary.patientAdvice}`}
+                                  language={item.patient?.preferredLanguage ?? "en"}
+                                />
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-xs text-[#4a4338]">
+                                The doctor did not write separate advice for this visit.
+                              </p>
+                            )}
+                          </>
                         ) : (
                           <p className="mt-1.5 text-sm text-[#4a4338]">
                             ⏳ Awaiting review — the doctor will read this history during your consultation
@@ -348,7 +401,6 @@ export default function PatientPortalPage() {
                       ) : (
                         <p className="text-gray-500 italic">No summary details available for this session.</p>
                       )}
-                      
 
                       <div className="pt-2 border-t text-xs text-[#4a4338]">
                         Opened by the treating physician on the hospital console. You can review or delete this submission here.
@@ -363,5 +415,57 @@ export default function PatientPortalPage() {
 
       </div>
     </div>
+  );
+}
+
+// ── 🔊 Read-aloud button (browser speech — free, offline, no API key) ──────
+// Reads the doctor's advice in the patient's own language. Built for
+// low-literacy and elderly patients who cannot read the advice text.
+function SpeakButton({ text, language }: { text: string; language?: string | null }) {
+  const [speaking, setSpeaking] = useState(false);
+
+  function toggle() {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const map: Record<string, string> = {
+      en: "en-IN",
+      hi: "hi-IN",
+      kn: "kn-IN",
+      ta: "ta-IN",
+      te: "te-IN",
+      bn: "bn-IN",
+      mr: "mr-IN",
+    };
+    const tag = map[language ?? "en"] ?? "en-IN";
+    u.lang = tag;
+    // prefer a native voice for the language when the device has one
+    const voices = window.speechSynthesis.getVoices();
+    const match =
+      voices.find((v) => v.lang?.toLowerCase() === tag.toLowerCase()) ??
+      voices.find((v) => v.lang?.toLowerCase().startsWith(tag.slice(0, 2).toLowerCase()));
+    if (match) u.voice = match;
+    u.rate = 0.92; // slightly slow — easier for elderly listeners
+    u.onend = () => setSpeaking(false);
+    u.onerror = () => setSpeaking(false);
+    setSpeaking(true);
+    window.speechSynthesis.speak(u);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      className={`mt-2 inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold ${
+        speaking ? "bg-[#b42318] text-white" : "bg-[#0f5c61] text-white"
+      }`}
+    >
+      {speaking ? "⏹ Stop" : "🔊 Listen to this advice"}
+    </button>
   );
 }

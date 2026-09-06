@@ -5,6 +5,7 @@ import { db } from "@/db";
 import { clinicalSummaries, patients, sessions } from "@/db/schema";
 import { CallNextButton } from "@/components/physician/call-next-button";
 import { queueOrder } from "@/lib/queue";
+import { expireOverdueTokens } from "@/lib/queue-server";
 import { PhysicianNav } from "@/components/physician/nav";
 import LiveAlerts from "@/components/physician/live-alerts";
 import { DeleteSessionButton } from "@/components/physician/delete-session-button";
@@ -28,6 +29,7 @@ function minutesAgo(date: Date | null) {
 
 export default async function PhysicianQueuePage() {
   await seedIfEmpty();
+  await expireOverdueTokens(); // flip overdue no-shows to "expired"
   const member = await staffOrDemo();
   if (!member) redirect("/login/staff");
 
@@ -60,6 +62,9 @@ export default async function PhysicianQueuePage() {
   const byDept = new Map<string, number>();
   for (const r of rows) byDept.set(r.session.department, (byDept.get(r.session.department) ?? 0) + 1);
   const topDepts = [...byDept.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const expiredToday = rows.filter(
+    (r) => r.session.status === "expired" && new Date(r.session.startedAt) >= startOfDay,
+  );
 
   return (
     <div className="min-h-screen">
@@ -112,6 +117,11 @@ export default async function PhysicianQueuePage() {
             {topDepts.length > 0 && (
               <p className="text-xs text-[#4a4338]">
                 Top departments: {topDepts.map(([d, n]) => `${deptLabel(d)} (${n})`).join(" · ")}
+              </p>
+            )}
+            {expiredToday.length > 0 && (
+              <p className="text-xs text-[#b42318]">
+                Tokens expired today (no-show): {expiredToday.length} — slots freed automatically
               </p>
             )}
           </div>

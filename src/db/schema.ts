@@ -61,6 +61,7 @@ export const sessions = pgTable("sessions", {
   startedAt: timestamp("started_at", { mode: "date" }).defaultNow().notNull(),
   submittedAt: timestamp("submitted_at", { mode: "date" }),
   calledAt: timestamp("called_at", { mode: "date" }),
+  expiresAt: timestamp("expires_at", { mode: "date" }),
   reviewedAt: timestamp("reviewed_at", { mode: "date" }),
   reviewedBy: text("reviewed_by"),
 });

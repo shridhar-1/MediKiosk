@@ -1,88 +1,141 @@
 import { db } from "@/db";
-import { sessions } from "@/db/schema";
-import { currentPatient, currentStaff } from "@/lib/auth";
-import { deleteSession } from "@/lib/records";
-import { loadSessionBundle } from "@/lib/session-data";
-import { eq } from "drizzle-orm";
+import { clinicalSummaries, consents, patients, sessions } from "@/db/schema";
+import { nid, tokenFor } from "@/lib/ids";
+import { expireOverdueTokens } from "@/lib/queue-server";
+import { seedIfEmpty } from "@/lib/seed";
+import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
-  const { id } = await context.params;
-  const bundle = await loadSessionBundle(id);
-  if (!bundle) return Response.json({ error: "Not found" }, { status: 404 });
-  return Response.json(bundle);
-}
-
-/**
- * DELETE /api/sessions/:id — permanently remove a submission.
- *
- * Authorization (real, signed-in session):
- *  - A patient can only delete one of their OWN sessions.
- *  - Any hospital staff (physician / triage / admin) can delete any session.
- *  - Public/demo requests are rejected.
- */
-export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
+// GET /api/sessions?phone=... OR ?abhaId=... OR ?patientId=...
+export async function GET(request: Request) {
   try {
-    const { id } = await context.params;
+    await seedIfEmpty();
+    // Lazy scheduler: every poll (board 10s, portal 30s) flips overdue
+    // no-show tokens to "expired" so their queue slots are freed.
+    await expireOverdueTokens();
 
-    const member = await currentStaff();
-    const patient = await currentPatient();
+    const { searchParams } = new URL(request.url);
+    const patientId = searchParams.get("patientId");
+    const phone = searchParams.get("phone");
+    const abhaId = searchParams.get("abhaId");
 
-    if (!member && !patient) {
-      return Response.json({ error: "Authentication required" }, { status: 401 });
+    const rows = await db
+      .select({
+        session: sessions,
+        patient: patients,
+        summary: clinicalSummaries,
+      })
+      .from(sessions)
+      .innerJoin(patients, eq(sessions.patientId, patients.id))
+      .leftJoin(clinicalSummaries, eq(clinicalSummaries.sessionId, sessions.id))
+      .orderBy(desc(sessions.startedAt));
+
+    // Filter by query parameters if present
+    // NOTE: phones are normalized to the LAST 10 DIGITS so that
+    // "+919876543210", "919876543210" and "9876543210" all match each other.
+    const last10 = (p?: string | null) => (p ?? "").replace(/\D/g, "").slice(-10);
+    let filteredRows = rows;
+    if (patientId) {
+      filteredRows = rows.filter((r) => r.patient.id === patientId);
+    } else if (phone) {
+      const wanted = last10(phone);
+      filteredRows =
+        wanted.length === 10 ? rows.filter((r) => last10(r.patient.phone) === wanted) : [];
+    } else if (abhaId) {
+      const digits = abhaId.replace(/\D/g, "");
+      filteredRows = rows.filter((r) => (r.patient.abhaId ?? "").replace(/\D/g, "") === digits);
     }
-
-    const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
-    if (!session) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    }
-
-    if (!member && patient && session.patientId !== patient.id) {
-      return Response.json({ error: "You can only delete your own submissions" }, { status: 403 });
-    }
-
-    await deleteSession(id);
 
     return Response.json({
-      success: true,
-      message: "Submission permanently deleted",
-      deletedSessionId: id,
-      deletedBy: member ? `staff:${member.id}` : `patient:${patient!.id}`,
+      sessions: filteredRows.map((r) => ({
+        ...r.session,
+        patient: r.patient,
+        summary: r.summary,
+      })),
     });
   } catch (error: any) {
-    console.error("DELETE /api/sessions/:id error:", error);
+    console.error("GET /api/sessions error:", error);
     return Response.json(
-      { error: error?.message || "Failed to delete session" },
-      { status: 500 },
+      { error: error?.message || "Failed to fetch sessions" },
+      { status: 500 }
     );
   }
 }
 
-export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  const { id } = await context.params;
-  const body = (await request.json()) as {
-    status?: string;
-    department?: string;
-    mode?: string;
-    language?: string;
-    physicianNotes?: string;
-    priority?: string;
-  };
+// POST /api/sessions -> Create a new intake session
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as {
+      patientId: string;
+      department?: string;
+      mode?: string;
+      language?: string;
+      consents?: { type: string; granted: boolean; audioExplained?: boolean }[];
+    };
 
-  const [updated] = await db
-    .update(sessions)
-    .set({
-      ...(body.status ? { status: body.status } : {}),
-      ...(body.department ? { department: body.department } : {}),
-      ...(body.mode ? { mode: body.mode } : {}),
-      ...(body.language ? { language: body.language } : {}),
-      ...(body.physicianNotes !== undefined ? { physicianNotes: body.physicianNotes } : {}),
-      ...(body.priority ? { priority: body.priority } : {}),
-    })
-    .where(eq(sessions.id, id))
-    .returning();
+    if (!body.patientId) {
+      return Response.json({ error: "patientId required" }, { status: 400 });
+    }
 
-  if (!updated) return Response.json({ error: "Not found" }, { status: 404 });
-  return Response.json({ session: updated });
+    const existing = await db.select().from(sessions);
+    const tokenNumber = tokenFor(
+      body.department ?? "general_medicine",
+      existing.length + 41
+    );
+
+    const [session] = await db
+      .insert(sessions)
+      .values({
+        id: nid(),
+        patientId: body.patientId,
+        department: body.department ?? "general_medicine",
+        mode: body.mode ?? "allopathic",
+        language: body.language ?? "en",
+        status: "interview",
+        tokenNumber,
+        priority: "routine",
+      })
+      .returning();
+
+    if (body.consents?.length) {
+      await db.insert(consents).values(
+        body.consents.map((c) => ({
+          id: nid(),
+          sessionId: session.id,
+          consentType: c.type,
+          granted: c.granted,
+          audioExplained: Boolean(c.audioExplained),
+        }))
+      );
+    }
+
+    return Response.json({ session });
+  } catch (error: any) {
+    console.error("POST /api/sessions error:", error);
+    return Response.json(
+      { error: error?.message || "Failed to create session" },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/sessions -> Clear all sessions
+export async function DELETE() {
+  try {
+    await db.delete(clinicalSummaries);
+    await db.delete(consents);
+    await db.delete(sessions);
+
+    return Response.json({
+      success: true,
+      message: "All sessions cleared successfully",
+    });
+  } catch (error: any) {
+    console.error("DELETE /api/sessions error:", error);
+    return Response.json(
+      { error: error?.message || "Failed to clear sessions" },
+      { status: 500 }
+    );
+  }
 }

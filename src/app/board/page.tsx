@@ -16,14 +16,20 @@ type Row = {
   startedAt: string;
   calledAt?: string | null;
   submittedAt?: string | null;
+  expiresAt?: string | null;
   patient: { fullName: string };
 };
 
 // Queue algorithm (same rules as the server lib): emergency → urgent →
-// longest waiting. Duplicated here because the board renders client-side.
+// longest waiting. Overdue no-show tokens drop out (expired).
 function queueSort(rows: Row[]): Row[] {
   const rank: Record<string, number> = { emergency: 0, urgent: 1, routine: 2 };
-  const waiting = rows.filter((r) => r.status === "submitted" || r.status === "summary");
+  const nowMs = Date.now();
+  const waiting = rows.filter(
+    (r) =>
+      (r.status === "submitted" || r.status === "summary") &&
+      !(r.expiresAt && !r.calledAt && new Date(r.expiresAt).getTime() < nowMs),
+  );
   return waiting.sort((a, b) => {
     const p = (rank[a.priority] ?? 2) - (rank[b.priority] ?? 2);
     if (p !== 0) return p;

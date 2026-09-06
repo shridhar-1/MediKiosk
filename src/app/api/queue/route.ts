@@ -2,12 +2,18 @@ import { db } from "@/db";
 import { sessions } from "@/db/schema";
 import { currentStaff } from "@/lib/auth";
 import { nowServing, queueOrder } from "@/lib/queue";
+import { expireOverdueTokens } from "@/lib/queue-server";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
-// GET  /api/queue → { nowServing, queue }        (kiosk ticket + board)
-// POST /api/queue → staff only, { sessionId? }   (call next / call specific)
+// ── OPD Queue API ──────────────────────────────────────────────────────────
+// GET  /api/queue          → { nowServing, queue } — used by the kiosk
+//                            ("3 ahead of you") and the token board.
+// POST /api/queue          → staff only. Body { sessionId? }:
+//                            no id → CALL NEXT (queue algorithm picks);
+//                            with id → call that specific patient.
+//                            Sets calledAt — the board flips instantly.
 
 function publicRow(r: typeof sessions.$inferSelect) {
   return {
@@ -23,6 +29,7 @@ function publicRow(r: typeof sessions.$inferSelect) {
 
 export async function GET() {
   try {
+    await expireOverdueTokens();
     const rows = await db.select().from(sessions);
     const serving = nowServing(rows);
     const queue = queueOrder(rows);
@@ -50,7 +57,9 @@ export async function POST(request: Request) {
     if (body.sessionId) {
       target = rows.find((r) => r.id === body.sessionId && (r.status === "submitted" || r.status === "summary")) ?? null;
     } else {
-      target = queueOrder(rows)[0] ?? null; // CALL NEXT — deterministic
+      // CALL NEXT — deterministic algorithm: emergency → urgent → longest wait
+      const next = queueOrder(rows)[0] ?? null;
+      target = next;
     }
 
     if (!target) {

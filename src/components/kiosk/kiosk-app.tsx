@@ -15,6 +15,7 @@ import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
 import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { classifyUtterance } from "@/lib/utterance-guard";
+import { arriveByTime, formatClockTime } from "@/lib/queue";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
@@ -1289,6 +1290,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 <p className="mt-3 text-sm text-[#4a4338]">
                   {DEPARTMENTS.find((d) => d.id === department)?.label} · {mode}
                 </p>
+                <QueuePosition token={token} />
                 {flags?.triggered && (
                   <p className="mt-4 rounded-full bg-[#b42318] px-3 py-1 text-xs font-semibold text-white">
                     {t("goTriage", lang)}
@@ -1494,5 +1496,55 @@ function Block({ title, body }: { title: string; body: string }) {
       <h2 className="text-xs uppercase tracking-[0.16em] text-[#c9842a]">{title}</h2>
       <p className="mt-1">{body}</p>
     </section>
+  );
+}
+
+// ── Live queue position on the patient's token ticket ─────────────────────
+// Fetches the deterministic OPD queue once and shows how many patients are
+// ahead plus a real clock time ("Be at the hospital by 10:45 am") so the
+// patient knows when to be at the consultation door.
+function QueuePosition({ token }: { token: string | null }) {
+  const [info, setInfo] = useState<{ ahead: number } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/queue", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!alive) return;
+        const idx = (data.queue ?? []).findIndex(
+          (q: { tokenNumber: string | null }) => q.tokenNumber === token,
+        );
+        if (idx >= 0) {
+          setInfo({ ahead: idx });
+        } else if (data.nowServing?.tokenNumber === token) {
+          setInfo({ ahead: 0 });
+        }
+      } catch {
+        /* silent — the ticket works without the estimate */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [token]);
+
+  if (info === null) return null;
+  const arriveBy = formatClockTime(arriveByTime(info.ahead));
+  return (
+    <div className="mt-4 rounded-2xl bg-[#dceee8] px-3 py-2 text-sm font-medium text-[#0f5c61]">
+      {info.ahead === 0 ? (
+        <p className="text-base">🔔 It is your turn — please go to the consultation room</p>
+      ) : (
+        <>
+          <p>
+            {info.ahead} {info.ahead === 1 ? "patient" : "patients"} ahead of you
+          </p>
+          <p className="mt-0.5 text-base font-bold">Be at the hospital by {arriveBy}</p>
+        </>
+      )}
+    </div>
   );
 }
