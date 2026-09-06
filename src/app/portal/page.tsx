@@ -17,6 +17,8 @@ export default function PatientPortalPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [liveQueue, setLiveQueue] = useState<{ token: string; ahead: number; arriveBy: string } | null>(null);
   const [expiredToken, setExpiredToken] = useState<string | null>(null);
+  const [booking, setBooking] = useState<{ id: string; token: string; time: string } | null>(null);
+  const [arriving, setArriving] = useState(false);
 
   // ── LIVE QUEUE STATUS + TOKEN EXPIRY ───────────────────────────────────
   // Finds the patient's active (waiting) token and polls /api/queue every
@@ -38,6 +40,21 @@ export default function PatientPortalPage() {
       return;
     }
     setExpiredToken(null);
+
+    // Home booking: appointment confirmed, not in the live queue yet.
+    const booked = submissions.find((s) => s.status === "scheduled" && s.tokenNumber);
+    if (booked) {
+      setBooking({
+        id: booked.id,
+        token: booked.tokenNumber,
+        time: booked.scheduledAt
+          ? formatClockTime(new Date(booked.scheduledAt))
+          : "your confirmed time",
+      });
+      setLiveQueue(null);
+      return;
+    }
+    setBooking(null);
 
     const active = submissions.find(
       (s) => (s.status === "submitted" || s.status === "summary") && s.tokenNumber,
@@ -118,6 +135,25 @@ export default function PatientPortalPage() {
     }
   };
 
+  // Patient booked from home and just reached the hospital — flip the
+  // booking into the LIVE queue (doctor's Call-next picks them up).
+  const confirmArrived = async (sessionId: string) => {
+    setArriving(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/arrive`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Could not check you in. Please see the reception desk.");
+      } else if (patientProfile) {
+        await fetchSubmissions(patientProfile); // reload → live queue card appears
+      }
+    } catch {
+      alert("Network error — please try again.");
+    } finally {
+      setArriving(false);
+    }
+  };
+
   const handleDeleteSubmission = async (sessionId: string) => {
     if (!confirm("Are you sure you want to delete this submission record? This cannot be undone.")) return;
 
@@ -143,7 +179,7 @@ export default function PatientPortalPage() {
   return (
     <div className="min-h-screen bg-[#fffdf7] p-4 md:p-10">
       <div className="max-w-4xl mx-auto space-y-6">
-
+        
         {/* TOP BAR / BRANDING */}
         <div className="flex items-center justify-between border-b border-[#1b1712]/10 pb-4">
           <div>
@@ -186,8 +222,26 @@ export default function PatientPortalPage() {
           </Link>
         </div>
 
-        {/* LIVE QUEUE STATUS — token + when to be at the hospital */}
-        {expiredToken ? (
+        {/* HOME BOOKING — appointment slot until the patient arrives */}
+        {booking ? (
+          <div className="bg-gradient-to-r from-[#8a5a13] to-[#c9842a] text-white rounded-2xl p-6 border border-[#8a5a13]/20 shadow-md flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="h-14 w-14 rounded-full bg-white/15 flex items-center justify-center text-2xl">🗓</div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-white/80">Your appointment today</p>
+                <h2 className="text-2xl font-bold">{booking.token} · {booking.time}</h2>
+                <p className="text-sm text-white/80 mt-1">Booked from home — please arrive 10 minutes early.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => void confirmArrived(booking.id)}
+              disabled={arriving}
+              className="inline-flex items-center gap-2 bg-white text-[#8a5a13] px-6 py-3 rounded-full font-semibold hover:bg-[#fffdf7] transition shadow-md disabled:opacity-60"
+            >
+              {arriving ? "Checking in…" : "📍 I have arrived at the hospital"}
+            </button>
+          </div>
+        ) : expiredToken ? (
           <div className="bg-[#fff5f3] border border-[#b42318]/30 rounded-2xl p-6 shadow-sm flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <div className="h-14 w-14 rounded-full bg-[#b42318]/10 flex items-center justify-center">

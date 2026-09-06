@@ -89,3 +89,13 @@ export function formatClockTime(d: Date): string {
     .toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true })
     .toLowerCase();
 }
+
+/** Scheduled slot for a patient registering from HOME: after everyone
+ *  currently waiting in the hospital queue, with a 15-minute minimum so a
+ *  home booking never says "come right now". Rounded to 5 minutes. */
+export function scheduleSlot(waitingCount: number, from: Date = new Date()): Date {
+  const minutes = Math.max(15, waitingCount * 8);
+  const t = new Date(from.getTime() + minutes * 60_000);
+  t.setMinutes(t.getMinutes() + ((5 - (t.getMinutes() % 5)) % 5), 0, 0);
+  return t;
+}

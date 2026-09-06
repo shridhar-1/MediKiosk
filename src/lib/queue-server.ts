@@ -8,9 +8,11 @@ import { db } from "@/db";
 import { sessions } from "@/db/schema";
 import { and, inArray, isNull, lt } from "drizzle-orm";
 
-/** Flip overdue waiting tokens to "expired". Safe to call on every request:
- *  matches only waiting rows whose expiresAt has passed and were never
- *  called. Emergency tokens have expiresAt = NULL → never expire. */
+/** Flip overdue tokens to "expired" — covers live-queue patients (submitted/
+ *  summary, 10-min grace after arrive-by) AND home bookings (scheduled,
+ *  30-min grace after the appointment time). Safe to call on every request:
+ *  matches only rows whose expiresAt has passed and were never called.
+ *  Emergency tokens have expiresAt = NULL → never expire. */
 export async function expireOverdueTokens(): Promise<number> {
   try {
     const expired = await db
@@ -18,7 +20,7 @@ export async function expireOverdueTokens(): Promise<number> {
       .set({ status: "expired" })
       .where(
         and(
-          inArray(sessions.status, ["submitted", "summary"]),
+          inArray(sessions.status, ["submitted", "summary", "scheduled"]),
           isNull(sessions.calledAt),
           lt(sessions.expiresAt, new Date()),
         ),

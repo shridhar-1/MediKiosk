@@ -44,12 +44,19 @@ export default async function PhysicianQueuePage() {
     .leftJoin(clinicalSummaries, eq(clinicalSummaries.sessionId, sessions.id))
     .orderBy(desc(sessions.startedAt));
 
-  // Queue algorithm: emergency → urgent → longest waiting first
   const waiting = queueOrder(rows.map((r) => r.session)).map(
     (s) => rows.find((r) => r.session.id === s.id)!,
   );
   const done = rows.filter((r) => r.session.status === "reviewed");
   const emergencies = waiting.filter((r) => r.session.priority === "emergency");
+  // Home bookings: appointment confirmed, arriving later (not in live queue)
+  const scheduled = rows
+    .filter((r) => r.session.status === "scheduled")
+    .sort(
+      (a, b) =>
+        new Date(a.session.scheduledAt ?? 0).getTime() -
+        new Date(b.session.scheduledAt ?? 0).getTime(),
+    );
 
   // ── Deterministic OPD analytics (SQL data, never LLM-invented) ──────────
   const startOfDay = new Date();
@@ -151,6 +158,23 @@ export default async function PhysicianQueuePage() {
             )}
           </div>
         </section>
+
+        {scheduled.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-xs uppercase tracking-[0.2em] text-[#c9842a]">
+              Scheduled from home — arriving later
+            </h2>
+            <div className="mt-3 grid gap-3">
+              {scheduled.map((row) => (
+                <QueueRow key={row.session.id} row={row} accent="urgent" />
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-[#4a4338]">
+              Their history is already complete — read it before they arrive. They join the live
+              queue when they press &ldquo;I have arrived&rdquo;.
+            </p>
+          </section>
+        )}
 
         <section className="mt-10">
           <h2 className="text-xs uppercase tracking-[0.2em] text-[#4a4338]">Confirmed into HIS</h2>

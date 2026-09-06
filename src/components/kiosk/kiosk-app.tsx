@@ -15,7 +15,7 @@ import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
 import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { classifyUtterance } from "@/lib/utterance-guard";
-import { arriveByTime, formatClockTime } from "@/lib/queue";
+import { arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
@@ -134,6 +134,9 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [audioExplained, setAudioExplained] = useState<Record<string, boolean>>({});
   const [mode, setMode] = useState<CareMode>("allopathic");
   const [department, setDepartment] = useState("general_medicine");
+  // Where the patient is right now — asked on the department step.
+  // hospital → live queue (doctor calls); home → scheduled time slot.
+  const [location, setLocation] = useState<"hospital" | "home">("hospital");
   const [patientId, setPatientId] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [token, setToken] = useState<string>("");
@@ -309,6 +312,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           patientId: data.patient.id,
           department,
           mode,
+          location,
           language: lang,
           consents: Object.entries(granted).map(([type, g]) => ({
             type,
@@ -853,6 +857,44 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           {step === "department" && (
             <div className="rise mx-auto max-w-4xl">
               <h1 className="serif text-4xl">{t("departmentTitle", lang)}</h1>
+
+              {/* ── Where are you right now? ─────────────────────────────── */}
+              <div className="mt-6 rounded-[24px] border border-[#1b1712]/10 bg-[#fffdf7] p-5">
+                <p className="text-sm font-semibold text-[#08363a]">Where are you right now?</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setLocation("hospital")}
+                    className={`rounded-2xl border px-5 py-4 text-left transition ${
+                      location === "hospital"
+                        ? "border-[#0f5c61] bg-[#0f5c61] text-white"
+                        : "border-[#1b1712]/10 bg-white"
+                    }`}
+                  >
+                    <span className="text-2xl">🏥</span>
+                    <span className="mt-1 block font-semibold">I am at the hospital</span>
+                    <span className={`mt-0.5 block text-xs ${location === "hospital" ? "text-white/80" : "text-[#4a4338]"}`}>
+                      Join the live queue — the doctor will call your token
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLocation("home")}
+                    className={`rounded-2xl border px-5 py-4 text-left transition ${
+                      location === "home"
+                        ? "border-[#c9842a] bg-[#c9842a] text-white"
+                        : "border-[#1b1712]/10 bg-white"
+                    }`}
+                  >
+                    <span className="text-2xl">🏠</span>
+                    <span className="mt-1 block font-semibold">I am at home</span>
+                    <span className={`mt-0.5 block text-xs ${location === "home" ? "text-white/80" : "text-[#4a4338]"}`}>
+                      Book a time slot — we will reserve your place in line
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               <div className="mt-6 flex gap-2">
                 <button
                   type="button"
@@ -1290,7 +1332,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 <p className="mt-3 text-sm text-[#4a4338]">
                   {DEPARTMENTS.find((d) => d.id === department)?.label} · {mode}
                 </p>
-                <QueuePosition token={token} />
+                {location === "home" ? <ScheduleSlotBox /> : <QueuePosition token={token} />}
                 {flags?.triggered && (
                   <p className="mt-4 rounded-full bg-[#b42318] px-3 py-1 text-xs font-semibold text-white">
                     {t("goTriage", lang)}
@@ -1318,6 +1360,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     setAudioExplained({});
                     setMode("allopathic");
                     setDepartment("general_medicine");
+                    setLocation("hospital");
                     setPatientId(null);
                     setSessionId(null);
                     setToken("");
@@ -1496,6 +1539,41 @@ function Block({ title, body }: { title: string; body: string }) {
       <h2 className="text-xs uppercase tracking-[0.16em] text-[#c9842a]">{title}</h2>
       <p className="mt-1">{body}</p>
     </section>
+  );
+}
+
+// ── Appointment slot for HOME bookings ────────────────────────────────────
+// Home patients are NOT in the live queue — they get a scheduled time
+// (after everyone currently waiting, min 15 minutes) to arrive at the OPD.
+function ScheduleSlotBox() {
+  const [slot, setSlot] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/queue", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!alive) return;
+        const waiting = (data.queue ?? []).length;
+        setSlot(formatClockTime(scheduleSlot(waiting)));
+      } catch {
+        /* silent — the ticket works without the slot */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!slot) return null;
+  return (
+    <div className="mt-4 rounded-2xl bg-[#fdf3e0] px-3 py-2 text-sm font-medium text-[#8a5a13]">
+      <p>Your appointment is booked for</p>
+      <p className="mt-0.5 text-base font-bold">{slot}</p>
+      <p className="mt-0.5 text-xs">Please arrive 10 minutes early and press &ldquo;I have arrived&rdquo; in your portal.</p>
+    </div>
   );
 }
 

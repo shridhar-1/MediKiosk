@@ -55,6 +55,9 @@ export const sessions = pgTable("sessions", {
   status: text("status").notNull().default("identify"),
   tokenNumber: text("token_number"),
   priority: text("priority").notNull().default("routine"),
+  // Where the patient took the intake: "hospital" (live queue, doctor calls)
+  // or "home" (pre-registration → gets a scheduled time slot instead).
+  location: text("location").notNull().default("hospital"),
   redFlagTriggered: boolean("red_flag_triggered").notNull().default(false),
   redFlagReasons: jsonb("red_flag_reasons").$type<string[]>(),
   physicianNotes: text("physician_notes"),
@@ -62,6 +65,7 @@ export const sessions = pgTable("sessions", {
   submittedAt: timestamp("submitted_at", { mode: "date" }),
   calledAt: timestamp("called_at", { mode: "date" }),
   expiresAt: timestamp("expires_at", { mode: "date" }),
+  scheduledAt: timestamp("scheduled_at", { mode: "date" }),
   reviewedAt: timestamp("reviewed_at", { mode: "date" }),
   reviewedBy: text("reviewed_by"),
 });

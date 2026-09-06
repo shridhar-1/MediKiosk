@@ -3,7 +3,7 @@ import { hisEvents, patients, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { notifyHospitalSubmission } from "@/lib/notify";
 import { enqueuePatientSms } from "@/lib/sms-outbox";
-import { aheadCount, arriveByTime, formatClockTime } from "@/lib/queue";
+import { aheadCount, arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
 import { loadSessionBundle } from "@/lib/session-data";
 import { desc, eq } from "drizzle-orm";
 
@@ -14,10 +14,18 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   const bundle = await loadSessionBundle(id);
   if (!bundle) return Response.json({ error: "Not found" }, { status: 404 });
 
+  // ── WHERE IS THE PATIENT? ─────────────────────────────────────────────
+  // "home"  → pre-registration: status "scheduled", gets an appointment slot
+  //           (NOT in the live queue — the doctor is not calling them yet).
+  // "hospital" → live queue: status "submitted", Call-next + board as usual.
+  // EMERGENCY overrides home: a red-flagged patient is always pushed into
+  // the live queue with "reach the hospital now".
+  const isHome = bundle.session.location === "home" && bundle.session.priority !== "emergency";
+
   await db
     .update(sessions)
     .set({
-      status: "submitted",
+      status: isHome ? "scheduled" : "submitted",
       submittedAt: new Date(),
     })
     .where(eq(sessions.id, id));
@@ -101,10 +109,32 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
   // ── PATIENT TOKEN SMS (via hospital's Android SMS-gateway phone) ────────
   // Queued in sms_outbox; the gateway phone polls /api/sms/outbox and sends
   // it from the hospital SIM's free daily SMS pack. Never throws.
-  // Message includes the patient's LIVE queue position and an arrive-by time
-  // (deterministic queue math: ahead × 8 min, rounded to 5 min).
   const allSessions = await db.select().from(sessions);
   const ahead = aheadCount(allSessions, id);
+
+  if (isHome) {
+    // ── HOME BOOKING: scheduled appointment, not the live queue ──────────
+    // Slot = after everyone currently waiting (15-min minimum). The booking
+    // expires 30 minutes after the slot if the patient never arrives.
+    const SCHEDULE_GRACE_MINUTES = 30;
+    const slot = scheduleSlot(ahead);
+    const slotLabel = formatClockTime(slot);
+    await db
+      .update(sessions)
+      .set({
+        scheduledAt: slot,
+        expiresAt: new Date(slot.getTime() + SCHEDULE_GRACE_MINUTES * 60_000),
+      })
+      .where(eq(sessions.id, id));
+    await enqueuePatientSms(
+      patient?.phone,
+      `MediKiosk: Appointment confirmed. Token ${session?.tokenNumber ?? "-"} - your slot is ${slotLabel}. Please arrive 10 minutes early. - District Hospital`,
+      "token",
+    );
+    return Response.json({ session, event, notifications, scheduled: true, scheduledAt: slot });
+  }
+
+  // ── IN HOSPITAL: live queue position + arrive-by time ──────────────────
   const arriveBy = formatClockTime(arriveByTime(ahead));
   // ── TOKEN EXPIRY ──────────────────────────────────────────────────────
   // Emergency tokens never expire. Others expire 10 minutes after the

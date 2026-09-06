@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { clinicalSummaries, consents, patients, sessions } from "@/db/schema";
 import { nid, tokenFor } from "@/lib/ids";
+import { expireOverdueTokens } from "@/lib/queue-server";
 import { seedIfEmpty } from "@/lib/seed";
 import { desc, eq } from "drizzle-orm";
 
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
     await seedIfEmpty();
+    // Lazy scheduler: every poll (board 10s, portal 30s) flips overdue
+    // no-show tokens to "expired" so their queue slots are freed.
+    await expireOverdueTokens();
 
     const { searchParams } = new URL(request.url);
     const patientId = searchParams.get("patientId");
@@ -67,6 +71,7 @@ export async function POST(request: Request) {
       department?: string;
       mode?: string;
       language?: string;
+      location?: string; // "hospital" (live queue) | "home" (scheduled slot)
       consents?: { type: string; granted: boolean; audioExplained?: boolean }[];
     };
 
@@ -91,6 +96,7 @@ export async function POST(request: Request) {
         status: "interview",
         tokenNumber,
         priority: "routine",
+        location: body.location === "home" ? "home" : "hospital",
       })
       .returning();
 
