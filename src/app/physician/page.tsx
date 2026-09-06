@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { staffOrDemo } from "@/lib/auth";
 import { db } from "@/db";
 import { clinicalSummaries, patients, sessions } from "@/db/schema";
+import { CallNextButton } from "@/components/physician/call-next-button";
+import { queueOrder } from "@/lib/queue";
 import { PhysicianNav } from "@/components/physician/nav";
 import LiveAlerts from "@/components/physician/live-alerts";
 import { DeleteSessionButton } from "@/components/physician/delete-session-button";
@@ -40,7 +42,10 @@ export default async function PhysicianQueuePage() {
     .leftJoin(clinicalSummaries, eq(clinicalSummaries.sessionId, sessions.id))
     .orderBy(desc(sessions.startedAt));
 
-  const waiting = rows.filter((r) => r.session.status === "submitted" || r.session.status === "summary");
+  // Queue algorithm: emergency → urgent → longest waiting first
+  const waiting = queueOrder(rows.map((r) => r.session)).map(
+    (s) => rows.find((r) => r.session.id === s.id)!,
+  );
   const done = rows.filter((r) => r.session.status === "reviewed");
   const emergencies = waiting.filter((r) => r.session.priority === "emergency");
 
@@ -70,6 +75,9 @@ export default async function PhysicianQueuePage() {
           </div>
           <div className="flex flex-col items-end gap-3">
             <LiveAlerts />
+            <div className="flex justify-end">
+              <CallNextButton />
+            </div>
             <dl className="grid grid-cols-3 gap-3 text-sm sm:grid-cols-6">
               <div className="rounded-2xl bg-[#fffdf7] px-3 py-3 ring-1 ring-[#1b1712]/8">
                 <dt className="text-xs text-[#4a4338]">Today</dt>

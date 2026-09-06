@@ -60,6 +60,7 @@ export const sessions = pgTable("sessions", {
   physicianNotes: text("physician_notes"),
   startedAt: timestamp("started_at", { mode: "date" }).defaultNow().notNull(),
   submittedAt: timestamp("submitted_at", { mode: "date" }),
+  calledAt: timestamp("called_at", { mode: "date" }),
   reviewedAt: timestamp("reviewed_at", { mode: "date" }),
   reviewedBy: text("reviewed_by"),
 });
