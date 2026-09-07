@@ -21,7 +21,7 @@
 //   AI_ENGINE_SUMMARY=groq,gemini       per-lane override for summaries
 //   AI_ENGINE_ASK=gemini,groq           per-lane override for Q&A
 
-export type AiTask = "summary" | "ask";
+export type AiTask = "summary" | "ask" | "extract";
 export type EngineId = "ollama" | "groq" | "gemini";
 
 const VALID: EngineId[] = ["ollama", "groq", "gemini"];
@@ -46,7 +46,7 @@ export function engineOrder(task: AiTask): EngineId[] {
 
   // 3) Defaults per environment
   const cloud = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
-  if (task === "summary") {
+  if (task === "summary" || task === "extract") {
     if (!cloud) return ["ollama", "groq", "gemini"];
     return process.env.GROQ_API_KEY
       ? ["groq", "gemini"]

@@ -15,6 +15,7 @@ import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
 import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { classifyUtterance } from "@/lib/utterance-guard";
+import type { ExtractedIntake } from "@/lib/chat-extract";
 import { arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
@@ -162,7 +163,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [flags, setFlags] = useState<{ triggered: boolean; priority: string; reasons: string[] } | null>(null);
   // True while the patient is confirming "this is NOT an emergency" on the
   // lock screen (false-alarm escape hatch, two-tap confirm).
-  const [cancellingEmergency, setCancellingEmergency] = useState(false);
+    const [cancellingEmergency, setCancellingEmergency] = useState(false);
+  // ── Fast-chat intake (⚡ optional mode beside the guided interview) ─────
+  const [chatMode, setChatMode] = useState(false);
+  const [chatText, setChatText] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatDone, setChatDone] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
   const question = questionById(qid);
@@ -394,7 +400,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setQid(nxt);
   }
 
-  function goBackQuestion() {
+    function goBackQuestion() {
     if (!question) return;
     const prev = previousQuestionId(question.id, answers, mode);
     if (!prev) {
@@ -402,6 +408,39 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       return;
     }
     setQid(prev);
+  }
+
+  // ── Fast chat: one paragraph → AI extraction → same question keys ───────
+  async function submitChat() {
+    if (!sessionId) return;
+    if (!chatText.trim()) {
+      setError("Please type or speak your problem first.");
+      return;
+    }
+    setChatBusy(true);
+    setError("");
+    stopMic();
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/chat-extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: chatText }),
+      });
+      const data = (await res.json()) as {
+        extracted: ExtractedIntake;
+        engine: string;
+        aiUsed: boolean;
+        flags?: { triggered: boolean; priority: string; reasons: string[] };
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "Could not build your file. Please use the guided questions.");
+      if (data.flags) setFlags(data.flags);
+      setChatDone({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setChatBusy(false);
+    }
   }
 
   async function addSample(sampleId: string) {
@@ -1042,8 +1081,151 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     </div>
                   )}
                 </div>
+                            ) : chatMode ? (
+                <>
+                  <div className="mb-4 flex flex-wrap justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setChatMode(false)}
+                      className="rounded-full border border-[#0f5c61]/30 bg-white px-4 py-1.5 text-sm font-semibold text-[#0f5c61] transition hover:bg-[#dceee8]"
+                    >
+                      ⭐ Guided — step by step
+                    </button>
+                    <span className="rounded-full bg-[#0f5c61] px-4 py-1.5 text-sm font-semibold text-white">
+                      ⚡ Fast chat
+                    </span>
+                  </div>
+
+                  {!chatDone ? (
+                    <div className="space-y-4">
+                      <h1 className="serif text-3xl leading-snug md:text-4xl">
+                        Tell us everything, in your own words
+                      </h1>
+                      <p className="text-sm text-[#c9842a]">
+                        Type or speak one paragraph — our AI builds your medical file from it.
+                      </p>
+                      <textarea
+                        value={chatText}
+                        onChange={(e) => setChatText(e.target.value)}
+                        placeholder={
+                          "Example: I have chest pain and sweating since 2 days, pain is 8 out of 10. " +
+                          "I take telmisartan 40 and brufen. I am allergic to sulfa drugs. " +
+                          "I have diabetes and BP. My father had heart disease. I smoke."
+                        }
+                        className="min-h-44 w-full rounded-3xl border border-[#1b1712]/12 bg-white px-4 py-3 text-lg text-black"
+                      />
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => void submitChat()}
+                          disabled={chatBusy || !chatText.trim()}
+                          className="rounded-full bg-[#0f5c61] px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-[#0b4a4e] disabled:opacity-50"
+                        >
+                          {chatBusy ? "Building your file…" : "Build my file ⚡"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleMic((text) => setChatText(text))}
+                          className={`rounded-full border px-6 py-3.5 text-base font-semibold transition ${
+                            listening
+                              ? "border-[#b42318] bg-[#f4d4cf] text-[#b42318]"
+                              : "border-[#1b1712]/15 bg-white text-[#1b1712]"
+                          }`}
+                        >
+                          {listening ? "● Listening — tap to stop" : "🎤 Speak instead"}
+                        </button>
+                      </div>
+                      {chatBusy && (
+                        <p className="text-sm text-[#4a4338]">
+                          Reading your words, checking allergies and drug conflicts…
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <h1 className="serif text-3xl leading-snug md:text-4xl">
+                        Your file is ready — please check
+                      </h1>
+                      <p className="text-sm text-[#4a4338]">
+                        Built by <span className="font-semibold text-[#0f5c61]">{chatDone.engine}</span> ·
+                        your doctor will double-check everything.
+                      </p>
+                      <div className="space-y-3 rounded-3xl border border-[#1b1712]/10 bg-white p-5 text-left">
+                        {(
+                          [
+                            ["Main problem", chatDone.extracted.chiefComplaint],
+                            ["Duration", chatDone.extracted.durationText],
+                            ["Severity (1–10)", chatDone.extracted.severity],
+                            ["Current medicines", chatDone.extracted.medications.join(", ")],
+                            ["Allergies", chatDone.extracted.allergies.join(", ")],
+                            ["Past history", chatDone.extracted.pastMedical],
+                            ["Family history", chatDone.extracted.familyHistory],
+                            ["Tobacco", chatDone.extracted.tobacco],
+                          ] as [string, string][]
+                        ).map(([label, value]) => (
+                          <div
+                            key={label}
+                            className="flex flex-col gap-0.5 border-b border-[#1b1712]/5 pb-2 last:border-0 last:pb-0"
+                          >
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-[#8a7f6a]">
+                              {label}
+                            </span>
+                            <span className="text-base text-[#1b1712]">{value?.trim() ? value : "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {flags?.triggered && (
+                        <p className="rounded-2xl bg-[#f4d4cf] px-4 py-3 text-sm font-medium text-[#b42318]">
+                          ⚠️ {flags.reasons[0]}
+                          {flags.reasons.length > 1
+                            ? ` (+${flags.reasons.length - 1} more — shown to the doctor)`
+                            : ""}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setStep("documents")}
+                          className="rounded-full bg-[#0f5c61] px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-[#0b4a4e]"
+                        >
+                          ✓ Looks right — continue
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChatMode(false)}
+                          className="rounded-full border border-[#1b1712]/15 bg-white px-6 py-3.5 text-base font-semibold text-[#1b1712] transition hover:bg-[#f6f0e4]"
+                        >
+                          ✎ Review question-by-question
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setChatDone(null)}
+                          className="rounded-full px-4 py-3.5 text-sm font-semibold text-[#0f5c61] underline underline-offset-4"
+                        >
+                          ↺ Say it again
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
+                  {/* ── intake mode switch: guided (default) vs fast chat ──── */}
+                  <div className="mb-4 flex flex-wrap justify-center gap-2">
+                    <span className="rounded-full bg-[#0f5c61] px-4 py-1.5 text-sm font-semibold text-white">
+                      ⭐ Guided — step by step
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChatDone(null);
+                        setChatMode(true);
+                      }}
+                      className="rounded-full border border-[#0f5c61]/30 bg-white px-4 py-1.5 text-sm font-semibold text-[#0f5c61] transition hover:bg-[#dceee8]"
+                    >
+                      ⚡ Fast chat — type it all
+                    </button>
+                  </div>
                   <div className="flex items-center justify-between text-sm text-[#4a4338]">
                     <span>
                       {progress.current} / {progress.total}
