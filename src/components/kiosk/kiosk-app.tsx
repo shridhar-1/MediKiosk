@@ -168,6 +168,8 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [chatMode, setChatMode] = useState(false);
   const [chatText, setChatText] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatMsgs, setChatMsgs] = useState<{ who: "you" | "ai"; text: string }[]>([]);
+  const [chatDraft, setChatDraft] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean } | null>(null);
   const [chatDone, setChatDone] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
@@ -410,32 +412,54 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setQid(prev);
   }
 
-  // ── Fast chat: one paragraph → AI extraction → same question keys ───────
+    // ── Fast chat: conversation → AI extraction → same question keys ────────
   async function submitChat() {
     if (!sessionId) return;
-    if (!chatText.trim()) {
+    const msg = chatText.trim();
+    if (!msg) {
       setError("Please type or speak your problem first.");
       return;
     }
     setChatBusy(true);
     setError("");
     stopMic();
+    const history = chatMsgs;
+    setChatMsgs((m) => [...m, { who: "you", text: msg }]);
+    setChatText("");
     try {
       const res = await fetch(`/api/sessions/${sessionId}/chat-extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: chatText }),
+        body: JSON.stringify({ text: msg, history }),
       });
       const data = (await res.json()) as {
-        extracted: ExtractedIntake;
+        chat?: boolean;
+        reply?: string;
+        extracted?: ExtractedIntake;
         engine: string;
         aiUsed: boolean;
+        followUp?: string;
         flags?: { triggered: boolean; priority: string; reasons: string[] };
         error?: string;
       };
       if (!res.ok) throw new Error(data.error || "Could not build your file. Please use the guided questions.");
       if (data.flags) setFlags(data.flags);
-      setChatDone({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed });
+      // greeting / chit-chat → warm reply, no file, keep chatting
+      if (data.chat) {
+        setChatMsgs((m) => [...m, { who: "ai", text: data.reply || "Please tell me what health problem you have." }]);
+        return;
+      }
+      if (data.extracted) setChatDraft({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed });
+      // essentials still missing → one focused follow-up question at a time
+      if (data.followUp && history.filter((x) => x.who === "you").length < 3) {
+        setChatMsgs((m) => [...m, { who: "ai", text: data.followUp! }]);
+        return;
+      }
+      setChatDone(
+        data.extracted
+          ? { extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed }
+          : chatDone,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -1120,7 +1144,32 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                             {l.native}
                           </button>
                         ))}
-                      </div>
+                                            </div>
+                      {/* the conversation so far — bubbles above the input */}
+                      {chatMsgs.length > 0 && (
+                        <div className="max-h-64 space-y-2 overflow-y-auto rounded-3xl bg-[#f6f0e4]/60 p-4">
+                          {chatMsgs.map((m, i) => (
+                            <div key={i} className={`flex ${m.who === "you" ? "justify-end" : "justify-start"}`}>
+                              <p
+                                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
+                                  m.who === "you"
+                                    ? "bg-[#0f5c61] text-white"
+                                    : "border border-[#1b1712]/10 bg-white text-[#1b1712]"
+                                }`}
+                              >
+                                {m.text}
+                              </p>
+                            </div>
+                          ))}
+                          {chatBusy && (
+                            <div className="flex justify-start">
+                              <p className="rounded-2xl border border-[#1b1712]/10 bg-white px-4 py-2.5 text-sm text-[#8a7f6a]">
+                                Reading your words, checking allergies and drug conflicts…
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <textarea
                         value={chatText}
                         onChange={(e) => setChatText(e.target.value)}
@@ -1138,7 +1187,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                           disabled={chatBusy || !chatText.trim()}
                           className="rounded-full bg-[#0f5c61] px-8 py-4 text-lg font-bold text-white shadow-lg transition hover:bg-[#0b4a4e] disabled:opacity-50"
                         >
-                          {chatBusy ? "Building your file…" : "Build my file ⚡"}
+                          {chatBusy ? "Checking…" : chatMsgs.length === 0 ? "Build my file ⚡" : "Send ⚡"}
                         </button>
                         <button
                           type="button"
@@ -1152,10 +1201,14 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                                                     {listening ? "● Listening — tap to stop" : `🎤 Speak in ${LANGUAGES.find((l) => l.code === lang)?.native ?? "English"}`}
                         </button>
                       </div>
-                      {chatBusy && (
-                        <p className="text-sm text-[#4a4338]">
-                          Reading your words, checking allergies and drug conflicts…
-                        </p>
+                                            {chatDraft && !chatBusy && !chatDone && (
+                        <button
+                          type="button"
+                          onClick={() => setChatDone(chatDraft)}
+                          className="text-sm font-semibold text-[#0f5c61] underline underline-offset-4"
+                        >
+                          Skip the questions — build my file now
+                        </button>
                       )}
                     </div>
                   ) : (
@@ -1216,7 +1269,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setChatDone(null)}
+                                                    onClick={() => {
+                            setChatDone(null);
+                            setChatDraft(null);
+                            setChatMsgs([]);
+                            setChatText("");
+                          }}
                           className="rounded-full px-4 py-3.5 text-sm font-semibold text-[#0f5c61] underline underline-offset-4"
                         >
                           ↺ Say it again
@@ -1234,8 +1292,10 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     </span>
                     <button
                       type="button"
-                      onClick={() => {
+                                            onClick={() => {
                         setChatDone(null);
+                        setChatDraft(null);
+                        setChatMsgs([]);
                         setChatMode(true);
                       }}
                       className="rounded-full border border-[#0f5c61]/30 bg-white px-4 py-1.5 text-sm font-semibold text-[#0f5c61] transition hover:bg-[#dceee8]"

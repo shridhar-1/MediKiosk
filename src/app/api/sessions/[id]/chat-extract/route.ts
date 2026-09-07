@@ -1,7 +1,7 @@
 import { db } from "@/db";
 import { historyResponses, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
-import { extractIntake } from "@/lib/chat-extract";
+import { extractIntake, type ChatTurn } from "@/lib/chat-extract";
 import { checkDrugSafety, drugSafetyResult } from "@/lib/drug-safety";
 import {
   evaluateRedFlags,
@@ -14,24 +14,39 @@ import { and, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
-// POST /api/sessions/[id]/chat-extract  { text }
-// "Fast chat" intake: one free paragraph → AI extracts the structured answers
-// → written into the SAME question keys as the guided interview → flags
-// (symptoms + speech + drug-safety) recomputed exactly like the answers route.
+// POST /api/sessions/[id]/chat-extract  { text, history? }
+// "Fast chat" intake — a real conversation, not one shot:
+//   · greeting/chit-chat → conversational reply, NOTHING written
+//   · medical message   → AI extracts structured answers from the WHOLE
+//     conversation → written into the SAME question keys as the guided
+//     interview → flags (symptoms + speech + drug-safety) recomputed every
+//     turn → returns one follow-up question while essentials are missing.
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const { text } = (await request.json()) as { text?: string };
-    if (!text || !text.trim()) {
+    const body = (await request.json()) as { text?: string; history?: unknown };
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!text.trim()) {
       return Response.json({ error: "text required" }, { status: 400 });
     }
 
     const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
     if (!session) return Response.json({ error: "Not found" }, { status: 404 });
 
-    // 1) AI (or honest naive parser) extracts the structure
-    const { extracted, engine, aiUsed } = await extractIntake(text);
+    // sanitize conversation history (bounded — kiosk memory is small)
+    const history: ChatTurn[] = (Array.isArray(body.history) ? body.history : [])
+      .map((h) => h as { who?: unknown; text?: unknown })
+      .filter((h) => (h.who === "patient" || h.who === "assistant") && typeof h.text === "string" && h.text.trim().length > 0)
+      .slice(-12)
+      .map((h) => ({ who: h.who as "patient" | "assistant", text: (h.text as string).slice(0, 2000) }));
+
+    // 1) Greeting guard / AI / naive — extraction from the whole conversation
+    const { isMedical, reply, extracted, followUp, engine, aiUsed } = await extractIntake(text, history);
+    if (!isMedical) {
+      // greetings & chit-chat: answer warmly, write nothing, no fake file
+      return Response.json({ chat: true, reply, engine, aiUsed });
+    }
 
     // 2) Map to the guided interview's question keys (same shapes)
     const rows: {
@@ -86,26 +101,27 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }
     }
 
-    // 4) Flags: structured + speech + drug-safety, cancellation respected
+    // 4) Flags: structured + speech + drug-safety, cancellation respected.
+    //    Re-run every turn — emergencies surface mid-conversation.
     const all = await db.select().from(historyResponses).where(eq(historyResponses.sessionId, id));
     const map = answersMap(all);
-    const saidEverything = all
+    const saidEverything = `${text} ${all
       .map((r) => {
         const json = r.answerJson as { values?: string[]; text?: string } | null;
         return [r.answerText, json?.text ?? "", (json?.values ?? []).join(" ")].join(" ");
       })
-      .join(" ");
+      .join(" ")}`;
     const drugFired = checkDrugSafety({
       allergies: extracted.allergies.join(", "),
       medications: extracted.medications.join(", "),
       conditionsText: saidEverything,
-      transcript: `${text} ${saidEverything}`,
+      transcript: saidEverything,
     });
     const flags = withPatientCancellation(
       session.emergencyCancelledAt,
       mergeRedFlagResults(
         evaluateRedFlags(map),
-        evaluateRedFlagsFromText(`${text} ${saidEverything}`),
+        evaluateRedFlagsFromText(saidEverything),
         drugSafetyResult(drugFired),
       ),
     );
@@ -119,7 +135,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       })
       .where(eq(sessions.id, id));
 
-    return Response.json({ extracted, engine, aiUsed, flags });
+    return Response.json({ extracted, engine, aiUsed, flags, followUp });
   } catch (error: any) {
     console.error("POST chat-extract error:", error);
     return Response.json({ error: error?.message || "Failed" }, { status: 500 });
