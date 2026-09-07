@@ -1,13 +1,15 @@
 // ── Chat-Intake extraction: free speech → structured interview answers ────
-// MULTI-TURN, CONTEXT-AWARE: the patient chats freely (any of 7 languages),
-// the AI extracts the SAME structured fields the guided interview collects,
-// detects what is MISSING, and asks one focused follow-up at a time. Every
-// turn re-runs the deterministic safety engines — red flags, drug–drug,
-// drug–allergy — so emergencies surface mid-conversation, not at the end.
+// MULTI-TURN, CONTEXT-AWARE, MULTILINGUAL: the patient chats freely in any
+// of 7 languages. The AI extracts the SAME structured fields the guided
+// interview collects, detects what is MISSING, and asks ONE follow-up at a
+// time — IN THE PATIENT'S OWN LANGUAGE. Short answers ("no", "ಇಲ್ಲ", "नहीं")
+// are interpreted as answers to the previous question, never as chit-chat.
+// Every turn re-runs the deterministic safety engines — red flags, drug–drug,
+// drug–allergy — so emergencies surface mid-conversation.
 //
-// Non-medical messages (greetings, "test", chit-chat) get a proper
-// conversational reply — never a fake medical file. No AI reachable →
-// honest naive parser with deterministic follow-ups.
+// Greetings ("hi", "ನಮಸ್ಕಾರ", "namaste") get a warm reply in the patient's
+// language — never a fake medical file. No AI reachable → honest naive
+// parser with deterministic translated follow-ups.
 
 import { engineOrder } from "@/lib/ai-router";
 
@@ -20,6 +22,10 @@ export type ExtractedIntake = {
   pastMedical: string;
   familyHistory: string;
   tobacco: string; // "" | "yes" | "no"
+  // set by the naive path when a short answer marked a field as KNOWN
+  medicationsKnown?: boolean;
+  allergiesKnown?: boolean;
+  pmhKnown?: boolean;
 };
 
 export type ChatTurn = { who: "patient" | "assistant"; text: string };
@@ -33,23 +39,93 @@ export type ExtractResult = {
   aiUsed: boolean;
 };
 
-const SYSTEM =
-  "You are the intake assistant at an Indian government hospital OPD kiosk. " +
-  "You converse with a patient in short, simple sentences (they may be elderly, " +
-  "in pain, or not highly literate). The patient's messages may be in English, " +
-  "transliterated chat, or native-script Indian language (Hindi, Kannada, Tamil, " +
-  "Telugu, Bengali, Marathi…). Your job, from the WHOLE conversation so far: " +
-  "(1) Decide if the patient is describing a health problem. Greetings (hi/hello/" +
-  "namaste), thanks, or unrelated chat are NOT medical — set isMedical false and " +
-  "reply with one short warm line inviting them to describe their problem. " +
-  "(2) If medical: extract the structured fields. Use ONLY what the patient " +
-  "actually said — never invent, never guess. Write values in simple English " +
-  "(transliterate medicine names as spoken). " +
-  "(3) If a CRITICAL detail is still unknown — current medicines, allergies, or " +
-  "major past illnesses (diabetes, BP, asthma…) — ask exactly ONE short follow-up " +
-  "question about the most important missing one (priority: medicines, then " +
-  "allergies, then past illness). If the essentials are covered, return an empty " +
-  "follow-up. Never ask two questions at once. Return ONLY valid JSON, no markdown.";
+// ── Patient-facing strings, all 7 languages ────────────────────────────────
+const LANG_NAME: Record<string, string> = {
+  en: "English", hi: "Hindi", ta: "Tamil", te: "Telugu",
+  bn: "Bengali", mr: "Marathi", kn: "Kannada",
+};
+
+const GREETING_REPLY: Record<string, string> = {
+  en: 'Hello! I am the hospital intake assistant. Please tell me what health problem you have — for example: "I have fever and headache since 2 days."',
+  hi: 'नमस्ते! मैं अस्पताल का सहायक हूँ। कृपया बताइए आपको क्या स्वास्थ्य समस्या है — जैसे: "मुझे 2 दिन से बुखार और सिरदर्द है।"',
+  kn: 'ನಮಸ್ಕಾರ! ನಾನು ಆಸ್ಪತ್ರೆಯ ಸಹಾಯಕ. ದಯವಿಟ್ಟು ನಿಮಗೆ ಇರುವ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಯನ್ನು ಹೇಳಿ — ಉದಾಹರಣೆಗೆ: "ನನಗೆ 2 ದಿನದಿಂದ ಜ್ವರ ಮತ್ತು ತಲೆನೋವು ಇದೆ."',
+  ta: 'வணக்கம்! நான் மருத்துவமனை உதவியாளர். உங்களுக்கு என்ன உடல்நலப் பிரச்சனை என்று சொல்லுங்கள் — உதாரணமாக: "எனக்கு 2 நாட்களாக காய்ச்சலும் தலைவலியும் உள்ளது."',
+  te: 'నమస్కారం! నేను ఆసుపత్రి సహాయకుడు. మీకు ఉన్న ఆరోగ్య సమస్య చెప్పండి — ఉదాహరణకు: "నాకు 2 రోజులుగా జ్వరం, తలనొప్పి ఉన్నాయి."',
+  bn: 'নমস্কার! আমি হাসপাতালের সহায়ক। আপনার কী স্বাস্থ্য সমস্যা তা বলুন — যেমন: "আমার ২ দিন ধরে জ্বর ও মাথাব্যথা।"',
+  mr: 'नमस्कार! मी रुग्णालयाचा सहाय्यक आहे. तुम्हाला काय आरोग्य समस्या आहे ते सांगा — उदाहरणार्थ: "मला २ दिवसांपासून ताप व डोकेदुखी आहे."',
+};
+
+const MORE_INFO_REPLY: Record<string, string> = {
+  en: "Please tell me a little more about your health problem.",
+  hi: "कृपया अपनी स्वास्थ्य समस्या के बारे में थोड़ा और बताएं।",
+  kn: "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಯ ಬಗ್ಗೆ ಇನ್ನಷ್ಟು ಹೇಳಿ.",
+  ta: "உங்கள் உடல்நலப் பிரச்சனை பற்றி இன்னும் கொஞ்சம் சொல்லுங்கள்.",
+  te: "మీ ఆరోగ్య సమస్య గురించి ఇంకొంచెం చెప్పండి.",
+  bn: "আপনার স্বাস্থ্য সমস্যা সম্পর্কে আরেকটু বলুন।",
+  mr: "कृपया तुमच्या आरोग्य समस्येबद्दल अजून थोडे सांगा.",
+};
+
+const Q_MEDS: Record<string, string> = {
+  en: "Do you take any medicines regularly?",
+  hi: "क्या आप नियमित रूप से कोई दवा लेते हैं?",
+  kn: "ನೀವು ನಿಯಮಿತವಾಗಿ ಯಾವುದೇ ಔಷಧಿಗಳನ್ನು ತೆಗೆದುಕೊಳ್ಳುತ್ತೀರಾ?",
+  ta: "நீங்கள் வழக்கமாக எந்த மருந்தையும் எடுக்கிறீர்களா?",
+  te: "మీరు క్రమం తప్పకుండా ఏవైనా మందులు వాడుతున్నారా?",
+  bn: "আপনি কি নিয়মিত কোনো ওষুধ নেন?",
+  mr: "तुम्ही नियमितपणे कोणतीही औषधे घेता का?",
+};
+
+const Q_ALLERGY: Record<string, string> = {
+  en: "Are you allergic to any medicine?",
+  hi: "क्या आपको किसी दवा से एलर्जी है?",
+  kn: "ನೀವು ಯಾವುದೇ ಔಷಧಿಗೆ ಅಲರ್ಜಿ ಹೊಂದಿದ್ದೀರಾ?",
+  ta: "எந்த மருந்திற்கும் உங்களுக்கு ஒவ்வாமை உள்ளதா?",
+  te: "మీకు ఏదైనా మందుకు అలర్జీ ఉందా?",
+  bn: "আপনার কি কোনো ওষুধে অ্যালার্জি আছে?",
+  mr: "तुम्हाला कोणत्याही औषधीची ऍलर्जी आहे का?",
+};
+
+const Q_PMH: Record<string, string> = {
+  en: "Do you have any diseases like diabetes, BP or asthma?",
+  hi: "क्या आपको मधुमेह, बीपी या अस्थमा जैसी बीमारी है?",
+  kn: "ನೀವು ಮಧುಮೇಹ, ರಕ್ತದೊತ್ತಡ ಅಥವಾ ಆಸ್ತಮಾ ದಂತಹ ಕಾಯಿಲೆ ಹೊಂದಿದ್ದೀರಾ?",
+  ta: "உங்களுக்கு சர்க்கரை நோய், ரத்த அழுத்தம் அல்லது ஆஸ்துமா போன்ற நோய்கள் உள்ளதா?",
+  te: "మీకు డయాబెటిస్, బిపి లేదా ఆస్తమా వంటి వ్యాధులు ఉన్నాయా?",
+  bn: "আপনার কি ডায়াবেটিস, বিপি বা হাঁপানির মতো কোনো রোগ আছে?",
+  mr: "तुम्हाला मधुमेह, बीपी किंवा दमा यासारखा आजार आहे का?",
+};
+
+function pick(map: Record<string, string>, lang: string): string {
+  return map[lang] ?? map.en;
+}
+
+// ── Prompt ─────────────────────────────────────────────────────────────────
+function systemPrompt(lang: string): string {
+  const language = LANG_NAME[lang] ?? "English";
+  return (
+    "You are the intake assistant at an Indian government hospital OPD kiosk. " +
+    "You converse with a patient in short, simple sentences (they may be elderly, " +
+    "in pain, or not highly literate). The patient speaks " + language + " — their " +
+    "messages may be native script or transliterated. " +
+    "From the WHOLE conversation so far: " +
+    "(1) Decide if the patient is describing a health problem. Greetings, thanks, " +
+    "or unrelated chat are NOT medical — set isMedical false and reply with one " +
+    "short warm line in " + language + " inviting them to describe their problem. " +
+    "(2) A SHORT ANSWER to your previous question (yes / no / none, in any " +
+    "language: ಹೌದು / ಇಲ್ಲ / हाँ / नहीं / ஆம் / இல்லை) IS part of the medical " +
+    "conversation — interpret it as the answer to exactly that question. 'No' " +
+    "after the medicines question means NO medicines: leave medications empty " +
+    "and treat it as KNOWN-none. Never re-ask a question that was already answered. " +
+    "(3) If medical: extract the structured fields from the whole conversation. " +
+    "Use ONLY what the patient actually said — never invent, never guess. Write " +
+    "the field VALUES in simple English (transliterate medicine names as spoken). " +
+    "(4) If a CRITICAL detail is still unknown — current medicines, allergies, or " +
+    "major past illnesses (diabetes, BP, asthma…) — ask exactly ONE short follow-up " +
+    "question in " + language + " about the most important missing one (priority: " +
+    "medicines, then allergies, then past illness). Never ask two questions at once. " +
+    "Return ONLY valid JSON, no markdown."
+  );
+}
 
 function transcriptPrompt(turns: ChatTurn[]): string {
   if (turns.length === 0) return "— conversation start —";
@@ -62,21 +138,24 @@ ${transcriptPrompt(turns)}
 
 Extract from the WHOLE conversation into this EXACT JSON shape ("" or [] when truly unknown — never invent):
 {
-  "isMedical": true if the patient is describing a health problem, false for greetings/chit-chat,
-  "reply": "when isMedical is false: one short warm line inviting their health problem, else ''",
-  "chiefComplaint": "main problem in <= 12 words",
-  "durationText": "e.g. '2 days', 'since last week' (as said)",
+  "isMedical": true if the patient is describing a health problem or answering your question, false for greetings/chit-chat,
+  "reply": "when isMedical is false: one short warm line in the patient's language, else ''",
+  "chiefComplaint": "main problem in <= 12 words (simple English)",
+  "durationText": "e.g. '2 days', '13 days' (simple English)",
   "severity": "pain/severity 1-10 if stated, else ''",
   "medications": ["current medicines with dose if said"],
   "allergies": ["allergies if stated"],
-  "pastMedical": "past diseases (diabetes, BP, asthma, surgery…) as said",
-  "familyHistory": "family history if said",
+  "pastMedical": "past diseases (diabetes, BP, asthma, surgery…) as said, simple English",
+  "familyHistory": "family history if said, simple English",
   "tobacco": "yes/no if smoking or tobacco mentioned, else ''",
-  "followUpQuestion": "ONE short question about the most important UNKNOWN critical detail, or '' if essentials are covered"
+  "followUpQuestion": "ONE short question in the patient's language about the most important UNKNOWN critical detail, or '' if essentials are covered",
+  "essentialsCovered": true when medicines, allergies AND past illnesses are all KNOWN (even if 'none'), else false
 }`;
 }
 
-type RawExtract = Partial<Record<keyof ExtractedIntake | "isMedical" | "reply" | "followUpQuestion", unknown>>;
+type RawExtract = Partial<
+  Record<keyof ExtractedIntake | "isMedical" | "reply" | "followUpQuestion" | "essentialsCovered", unknown>
+>;
 
 function emptyExtracted(): ExtractedIntake {
   return {
@@ -91,7 +170,9 @@ function emptyExtracted(): ExtractedIntake {
   };
 }
 
-function coerce(raw: RawExtract): { extracted: ExtractedIntake; isMedical: boolean; reply: string; followUp: string } {
+function coerce(raw: RawExtract): {
+  extracted: ExtractedIntake; isMedical: boolean; reply: string; followUp: string; essentialsCovered: boolean;
+} {
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const arr = (v: unknown) =>
     Array.isArray(v)
@@ -108,6 +189,7 @@ function coerce(raw: RawExtract): { extracted: ExtractedIntake; isMedical: boole
     isMedical: typeof raw.isMedical === "boolean" ? raw.isMedical : true,
     reply: str(raw.reply).slice(0, 300),
     followUp: str(raw.followUpQuestion).replace(/\s+/g, " ").slice(0, 200),
+    essentialsCovered: raw.essentialsCovered === true,
     extracted: {
       chiefComplaint: str(raw.chiefComplaint).slice(0, 160),
       durationText: str(raw.durationText).slice(0, 80),
@@ -122,10 +204,9 @@ function coerce(raw: RawExtract): { extracted: ExtractedIntake; isMedical: boole
 }
 
 // ── Greeting / chit-chat guard (deterministic, instant, zero AI) ───────────
-// The #1 complaint in our previous evaluation: "Hi" got a case-file dump.
-// Never again — a greeting gets a greeting, and an invitation to talk.
+// A greeting gets a greeting — never a fake medical file.
 const CHITCHAT =
-  /^(hi+|hii+|hello+|helo+|hey+|namaste|namaskara|vanakkam|good (morning|afternoon|evening|night)|thanks?|thank you|thx|thnx|ty|ok+|okay|okk+|k+|test(ing)?|checking|hello\?|hi\?|\.+|\?+)[\s!.?]*$/i;
+  /^(hi+|hii+|hello+|helo+|hey+|namaste|namaskara|vanakkam|ನಮಸ್ಕಾರ|ನಮಸ್ತೆ|ಧನ್ಯವಾದ|नमस्ते|नमस्कार|धन्यवाद|शुक्रिया|வணக்கம்|நன்றி|నమస్కారం|ధన్యవాదాలు|নমস্কার|ধন্যবাদ|good (morning|afternoon|evening|night)|thanks?|thank you|thx|thnx|ty|ok+|okay|okk+|k+|test(ing)?|checking|hello\?|hi\?|\.+|\?+)[\s!.?]*$/i;
 
 function isChitchat(text: string): boolean {
   const t = text.trim();
@@ -133,21 +214,14 @@ function isChitchat(text: string): boolean {
   return t.length <= 24 && CHITCHAT.test(t);
 }
 
-function chitchatReply(): ExtractResult {
-  return {
-    isMedical: false,
-    reply:
-      "Hello! I am the hospital intake assistant. Please tell me what health problem you have — " +
-      'for example: "I have fever and headache since 2 days."',
-    extracted: emptyExtracted(),
-    followUp: "",
-    engine: "intake-guard",
-    aiUsed: false,
-  };
-}
+// Bare yes / no in any supported language — an ANSWER, never chit-chat.
+const BARE_YES =
+  /^(yes|yeah|yep|ಹೌದು|हाँ|हां|ஆம்|అవును|হ্যাঁ|हो)[\s.!]*$/i;
+const BARE_NO =
+  /^(no|nope|none|ಇಲ್ಲ|ಇಲ್ಲಾ|नहीं|ना|இல்லை|இல்ல|లేదు|না|नाही)[\s.!]*$/i;
 
 // ── AI engines ─────────────────────────────────────────────────────────────
-async function viaGroq(turns: ChatTurn[]): Promise<ExtractResult | null> {
+async function viaGroq(turns: ChatTurn[], lang: string): Promise<ExtractResult | null> {
   const key = process.env.GROQ_API_KEY;
   if (!key) return null;
   for (const model of [process.env.GROQ_MODEL || "openai/gpt-oss-120b", "llama-3.3-70b-versatile"]) {
@@ -162,7 +236,7 @@ async function viaGroq(turns: ChatTurn[]): Promise<ExtractResult | null> {
           max_tokens: 700,
           response_format: { type: "json_object" },
           messages: [
-            { role: "system", content: SYSTEM },
+            { role: "system", content: systemPrompt(lang) },
             { role: "user", content: userPrompt(turns) },
           ],
         }),
@@ -176,7 +250,7 @@ async function viaGroq(turns: ChatTurn[]): Promise<ExtractResult | null> {
         isMedical: c.isMedical,
         reply: c.reply,
         extracted: c.extracted,
-        followUp: c.isMedical ? c.followUp : "",
+        followUp: c.isMedical && !c.essentialsCovered ? c.followUp : "",
         engine: `AI · ${model.split("/").pop()}`,
         aiUsed: true,
       };
@@ -187,7 +261,7 @@ async function viaGroq(turns: ChatTurn[]): Promise<ExtractResult | null> {
   return null;
 }
 
-async function viaGemini(turns: ChatTurn[]): Promise<ExtractResult | null> {
+async function viaGemini(turns: ChatTurn[], lang: string): Promise<ExtractResult | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
   try {
@@ -198,7 +272,7 @@ async function viaGemini(turns: ChatTurn[]): Promise<ExtractResult | null> {
         headers: { "Content-Type": "application/json" },
         signal: AbortSignal.timeout(45_000),
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `${SYSTEM}\n\n${userPrompt(turns)}` }] }],
+          contents: [{ parts: [{ text: `${systemPrompt(lang)}\n\n${userPrompt(turns)}` }] }],
           generationConfig: { temperature: 0.1, maxOutputTokens: 700 },
         }),
       },
@@ -213,7 +287,7 @@ async function viaGemini(turns: ChatTurn[]): Promise<ExtractResult | null> {
       isMedical: c.isMedical,
       reply: c.reply,
       extracted: c.extracted,
-      followUp: c.isMedical ? c.followUp : "",
+      followUp: c.isMedical && !c.essentialsCovered ? c.followUp : "",
       engine: "AI · gemini-2.0-flash",
       aiUsed: true,
     };
@@ -222,7 +296,7 @@ async function viaGemini(turns: ChatTurn[]): Promise<ExtractResult | null> {
   }
 }
 
-async function viaOllama(turns: ChatTurn[]): Promise<ExtractResult | null> {
+async function viaOllama(turns: ChatTurn[], lang: string): Promise<ExtractResult | null> {
   const base = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
   const model = process.env.OLLAMA_MODEL || "llama3.1";
   try {
@@ -236,7 +310,7 @@ async function viaOllama(turns: ChatTurn[]): Promise<ExtractResult | null> {
         format: "json",
         options: { temperature: 0.1 },
         messages: [
-          { role: "system", content: SYSTEM },
+          { role: "system", content: systemPrompt(lang) },
           { role: "user", content: userPrompt(turns) },
         ],
       }),
@@ -250,7 +324,7 @@ async function viaOllama(turns: ChatTurn[]): Promise<ExtractResult | null> {
       isMedical: c.isMedical,
       reply: c.reply,
       extracted: c.extracted,
-      followUp: c.isMedical ? c.followUp : "",
+      followUp: c.isMedical && !c.essentialsCovered ? c.followUp : "",
       engine: `local · ${model}`,
       aiUsed: true,
     };
@@ -260,6 +334,7 @@ async function viaOllama(turns: ChatTurn[]): Promise<ExtractResult | null> {
 }
 
 // ── Naive parser (no AI): sentence buckets — honest, labelled, never dead ──
+// Understands English + common Hindi/Kannada medical words.
 export function naiveExtract(text: string): ExtractResult {
   const sentences = text
     .split(/[.!?;\n]+/)
@@ -267,12 +342,25 @@ export function naiveExtract(text: string): ExtractResult {
     .filter((s) => s.length > 2);
   const has = (s: string, words: string[]) => words.some((w) => s.toLowerCase().includes(w));
 
-  const med = sentences.filter((s) => has(s, ["tablet", "mg", "medicine", "medication", "dawa", "capsule", "syrup", "injection", "ecosprin", "metformin", "telmisartan", "amoxicillin", "propranolol", "paracetamol", "insulin"]));
-  const alg = sentences.filter((s) => has(s, ["allerg", "allergy", "reaction to"]));
-  const dur = sentences.find((s) => /\b(since|for)\b/i.test(s) && /\b(day|days|week|weeks|month|months|year|years|hota|raha|din|hafte|mahine|saal)\b/i.test(s)) ?? "";
-  const pmh = sentences.filter((s) => has(s, ["diabet", "bp", "blood pressure", "asthma", "sugar", "thyroid", "surgery", "operat", "kidney", "heart", "stroke", "tb", "cancer"]));
-  const fam = sentences.filter((s) => has(s, ["father", "mother", "brother", "sister", "family"]));
-  const tob = sentences.filter((s) => has(s, ["smok", "cigarette", "tobacco", "beedi", "gutka"]));
+  const med = sentences.filter((s) =>
+    has(s, ["tablet", "mg", "medicine", "medication", "dawa", "capsule", "syrup", "injection",
+      "ecosprin", "metformin", "telmisartan", "amoxicillin", "propranolol", "paracetamol", "insulin",
+      "ಮಾತ್ರೆ", "ಔಷಧ", "दवा", "गोली"]),
+  );
+  const alg = sentences.filter((s) => has(s, ["allerg", "allergy", "reaction to", "ಅಲರ್ಜಿ", "एलर्जी"]));
+  const durUnits = /(day|week|month|year|din|dino|hafte|mahine|saal|दिन|हफ्ते|महीने|साल|ದಿನ|ವಾರ|ತಿಂಗಳ|ವರ್ಷ)/i;
+  const durSince = /(\bsince\b|\bfor\b|से|ದಿಂದ|ಆಗಿ|இருந்து|నుండి|থেকে|पासून)/i;
+  const dur = sentences.find((s) => durSince.test(s) && durUnits.test(s)) ?? "";
+  const pmh = sentences.filter((s) =>
+    has(s, ["diabet", "bp", "blood pressure", "asthma", "sugar", "thyroid", "surgery", "operat",
+      "kidney", "heart", "stroke", "tb", "cancer",
+      "ಮಧುಮೇಹ", "ಸಕ್ಕರೆ", "ರಕ್ತದೊತ್ತಡ", "ಆಸ್ತಮಾ", "ಕಾಯಿದೆ", "ಹೃದಯ", "ಮೂತ್ರಪಿಂಡ", "ಶಸ್ತ್ರಚಿಕಿತ್ಸೆ",
+      "मधुमेह", "शुगर", "बीपी", "अस्थमा", "दिल", "सर्जरी", "किडनी"]),
+  );
+  const fam = sentences.filter((s) => has(s, ["father", "mother", "brother", "sister", "family", "ಅಪ್ಪ", "ಅಮ್ಮ", "पिता", "माता"]));
+  const tob = sentences.filter((s) =>
+    has(s, ["smok", "cigarette", "tobacco", "beedi", "gutka", "ಧೂಮಪಾನ", "ಸಿಗರೇಟ್", "धूमपान", "बीड़ी", "सिगरेट"]),
+  );
   const sevMatch = text.match(/(?:severity|pain)\s*(?:is\s*)?(?:of\s*)?(\d{1,2})\s*(?:\/|out of)?\s*(?:10)?/i);
   const chief = sentences.find((s) => !med.includes(s) && !alg.includes(s)) ?? sentences[0] ?? "";
 
@@ -295,56 +383,113 @@ export function naiveExtract(text: string): ExtractResult {
   };
 }
 
-// Naive deterministic follow-up: most important unknown critical detail.
-function naiveFollowUp(e: ExtractedIntake): string {
-  if (e.medications.length === 0 && !e.pastMedical) return "Do you take any medicines regularly?";
-  if (e.allergies.length === 0) return "Are you allergic to any medicine?";
-  if (!e.pastMedical) return "Do you have any diseases like diabetes, BP or asthma?";
+// Naive deterministic follow-up (translated): most important unknown.
+function naiveFollowUp(e: ExtractedIntake, lang: string): string {
+  if (!e.medicationsKnown && e.medications.length === 0) return pick(Q_MEDS, lang);
+  if (!e.allergiesKnown && e.allergies.length === 0) return pick(Q_ALLERGY, lang);
+  if (!e.pmhKnown && !e.pastMedical) return pick(Q_PMH, lang);
   return "";
+}
+
+/** Which question was the assistant's last message? (for short answers) */
+function matchLastQuestion(lastAssistant: string, lang: string): "meds" | "allergy" | "pmh" | null {
+  if (!lastAssistant) return null;
+  const norm = (s: string) => s.trim().toLowerCase();
+  if (norm(lastAssistant) === norm(pick(Q_MEDS, lang))) return "meds";
+  if (norm(lastAssistant) === norm(pick(Q_ALLERGY, lang))) return "allergy";
+  if (norm(lastAssistant) === norm(pick(Q_PMH, lang))) return "pmh";
+  return null;
 }
 
 /**
  * Chat → structured intake. Multi-turn: the whole conversation is re-read
  * every turn, so answers to follow-ups merge into one file. AI lanes first,
- * honest naive fallback, instant greeting guard.
+ * honest naive fallback, instant greeting guard. `lang` is the kiosk's
+ * selected language — replies and follow-ups are written in it.
  */
-export async function extractIntake(text: string, history: ChatTurn[] = []): Promise<ExtractResult> {
+export async function extractIntake(text: string, history: ChatTurn[] = [], lang = "en"): Promise<ExtractResult> {
   const clean = text.trim().slice(0, 4000);
   const priorPatientTurns = history.filter((h) => h.who === "patient").length;
+  const lastAssistant = [...history].reverse().find((t) => t.who === "assistant")?.text ?? "";
 
-  // Fresh conversation + obvious greeting/test → instant conversational
-  // reply, zero AI, nothing written. (Mid-conversation "ok"/"thanks" is
-  // judged by the AI with full context instead.)
-  if (priorPatientTurns === 0 && isChitchat(clean)) return chitchatReply();
+  // Fresh conversation + obvious greeting/test → instant warm reply in the
+  // patient's language, zero AI, nothing written.
+  if (priorPatientTurns === 0 && isChitchat(clean)) {
+    return {
+      isMedical: false,
+      reply: pick(GREETING_REPLY, lang),
+      extracted: emptyExtracted(),
+      followUp: "",
+      engine: "intake-guard",
+      aiUsed: false,
+    };
+  }
 
   const turns: ChatTurn[] = [...history, { who: "patient", text: clean }];
   for (const engine of engineOrder("extract")) {
     const result =
-      engine === "ollama" ? await viaOllama(turns)
-      : engine === "groq" ? await viaGroq(turns)
-      : await viaGemini(turns);
+      engine === "ollama" ? await viaOllama(turns, lang)
+      : engine === "groq" ? await viaGroq(turns, lang)
+      : await viaGemini(turns, lang);
     if (result) {
+      // Short vernacular answers are NEVER chit-chat — they answer the last
+      // question. (Belt-and-braces on top of the prompt.)
+      if (!result.isMedical && (BARE_YES.test(clean) || BARE_NO.test(clean)) && lastAssistant) {
+        result.isMedical = true;
+        result.reply = "";
+      }
+      // Never re-ask the same question back-to-back.
+      if (result.followUp && result.followUp.trim().toLowerCase() === lastAssistant.trim().toLowerCase()) {
+        result.followUp = "";
+      }
       // Hard cap: never ask more than 3 follow-ups total.
       if (priorPatientTurns >= 3) result.followUp = "";
       return result;
     }
   }
 
-  // Naive fallback — merge every patient turn into one text, honest follow-up.
-  const patientText = turns.filter((t) => t.who === "patient").map((t) => t.text).join(". ");
-  if (priorPatientTurns > 0 && isChitchat(clean)) {
+  // ── Naive fallback (no AI reachable) ─────────────────────────────────────
+  // Mid-conversation bare chit-chat: ask for more, politely, in-language.
+  if (priorPatientTurns > 0 && isChitchat(clean) && !lastAssistant) {
     return {
       isMedical: false,
-      reply: "Please tell me a little more about your health.",
+      reply: pick(MORE_INFO_REPLY, lang),
       extracted: emptyExtracted(),
       followUp: "",
       engine: "naive-parser",
       aiUsed: false,
     };
   }
+
+  const patientText = turns.filter((t) => t.who === "patient").map((t) => t.text).join(". ");
   const naive = naiveExtract(patientText);
+  const e = naive.extracted;
+
+  // Reconstruct KNOWN state from the WHOLE history: every assistant question
+  // that already got a bare yes/no answer is answered — never re-ask it.
+  let pending: "meds" | "allergy" | "pmh" | null = null;
+  for (const t of turns) {
+    if (t.who === "assistant") {
+      pending = matchLastQuestion(t.text, lang);
+    } else if (pending && (BARE_YES.test(t.text) || BARE_NO.test(t.text))) {
+      if (BARE_NO.test(t.text)) {
+        if (pending === "meds") { e.medications = []; e.medicationsKnown = true; }
+        if (pending === "allergy") { e.allergies = []; e.allergiesKnown = true; }
+        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "None reported"; e.pmhKnown = true; }
+      } else {
+        if (pending === "meds" && e.medications.length === 0) { e.medications = ["Names not stated yet"]; e.medicationsKnown = true; }
+        if (pending === "allergy" && e.allergies.length === 0) { e.allergies = ["Not stated yet"]; e.allergiesKnown = true; }
+        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "Yes — details not stated"; e.pmhKnown = true; }
+      }
+      pending = null;
+    } else if (t.who === "patient") {
+      pending = null;
+    }
+  }
+
   return {
     ...naive,
-    followUp: priorPatientTurns >= 3 ? "" : naiveFollowUp(naive.extracted),
+    extracted: e,
+    followUp: priorPatientTurns >= 3 ? "" : naiveFollowUp(e, lang),
   };
 }

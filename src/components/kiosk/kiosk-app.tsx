@@ -423,7 +423,10 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setChatBusy(true);
     setError("");
     stopMic();
-    const history = chatMsgs;
+        const history = chatMsgs.map((m) => ({
+      who: m.who === "you" ? ("patient" as const) : ("assistant" as const),
+      text: m.text,
+    }));
     setChatMsgs((m) => [...m, { who: "you", text: msg }]);
     setChatText("");
     try {
@@ -451,7 +454,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       }
       if (data.extracted) setChatDraft({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed });
       // essentials still missing → one focused follow-up question at a time
-      if (data.followUp && history.filter((x) => x.who === "you").length < 3) {
+           if (data.followUp && history.filter((x) => x.who === "patient").length < 3) {
         setChatMsgs((m) => [...m, { who: "ai", text: data.followUp! }]);
         return;
       }

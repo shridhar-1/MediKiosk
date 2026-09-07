@@ -25,24 +25,29 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const body = (await request.json()) as { text?: string; history?: unknown };
+        const body = (await request.json()) as { text?: string; history?: unknown; lang?: string };
     const text = typeof body.text === "string" ? body.text : "";
     if (!text.trim()) {
       return Response.json({ error: "text required" }, { status: 400 });
     }
+    const lang = typeof body.lang === "string" ? body.lang.slice(0, 5) : "en";
 
     const [session] = await db.select().from(sessions).where(eq(sessions.id, id)).limit(1);
     if (!session) return Response.json({ error: "Not found" }, { status: 404 });
 
-    // sanitize conversation history (bounded — kiosk memory is small)
+        // sanitize conversation history (bounded — kiosk memory is small).
+    // accepts both vocabularies: patient/assistant and you/ai (kiosk bubbles)
     const history: ChatTurn[] = (Array.isArray(body.history) ? body.history : [])
       .map((h) => h as { who?: unknown; text?: unknown })
-      .filter((h) => (h.who === "patient" || h.who === "assistant") && typeof h.text === "string" && h.text.trim().length > 0)
-      .slice(-12)
-      .map((h) => ({ who: h.who as "patient" | "assistant", text: (h.text as string).slice(0, 2000) }));
+      .filter((h) => typeof h.text === "string" && h.text.trim().length > 0)
+      .map((h) => ({
+        who: h.who === "assistant" || h.who === "ai" ? ("assistant" as const) : ("patient" as const),
+        text: (h.text as string).slice(0, 2000),
+      }))
+      .slice(-12);
 
     // 1) Greeting guard / AI / naive — extraction from the whole conversation
-    const { isMedical, reply, extracted, followUp, engine, aiUsed } = await extractIntake(text, history);
+    const { isMedical, reply, extracted, followUp, engine, aiUsed } = await extractIntake(text, history, lang);
     if (!isMedical) {
       // greetings & chit-chat: answer warmly, write nothing, no fake file
       return Response.json({ chat: true, reply, engine, aiUsed });
