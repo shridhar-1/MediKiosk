@@ -27,7 +27,10 @@ export type ExtractResult = {
 const SYSTEM =
   "You are a clinical intake assistant for an Indian government hospital OPD. " +
   "You convert a patient's free-spoken/typed description into structured fields. " +
+  "The input may be in English, transliterated chat, or native-script Indian language " +
+  "(Hindi, Kannada, Tamil, Telugu, Bengali, Marathi…). " +
   "Use ONLY what the patient said — never invent, never guess. " +
+  "Write the extracted values in simple English (transliterate medicine names as spoken). " +
   "Return ONLY valid JSON, no markdown.";
 
 function userPrompt(text: string): string {

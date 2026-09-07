@@ -1101,9 +1101,26 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                       <h1 className="serif text-3xl leading-snug md:text-4xl">
                         Tell us everything, in your own words
                       </h1>
-                      <p className="text-sm text-[#c9842a]">
+                                            <p className="text-sm text-[#c9842a]">
                         Type or speak one paragraph — our AI builds your medical file from it.
                       </p>
+                      {/* recognition language — mic listens in THIS language */}
+                      <div className="flex flex-wrap gap-2">
+                        {LANGUAGES.map((l) => (
+                          <button
+                            key={l.code}
+                            type="button"
+                            onClick={() => setLang(l.code)}
+                            className={`rounded-full border px-3.5 py-1.5 text-sm font-semibold transition ${
+                              lang === l.code
+                                ? "border-[#0f5c61] bg-[#0f5c61] text-white"
+                                : "border-[#1b1712]/15 bg-white text-[#1b1712] hover:bg-[#f6f0e4]"
+                            }`}
+                          >
+                            {l.native}
+                          </button>
+                        ))}
+                      </div>
                       <textarea
                         value={chatText}
                         onChange={(e) => setChatText(e.target.value)}
@@ -1132,7 +1149,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                               : "border-[#1b1712]/15 bg-white text-[#1b1712]"
                           }`}
                         >
-                          {listening ? "● Listening — tap to stop" : "🎤 Speak instead"}
+                                                    {listening ? "● Listening — tap to stop" : `🎤 Speak in ${LANGUAGES.find((l) => l.code === lang)?.native ?? "English"}`}
                         </button>
                       </div>
                       {chatBusy && (
