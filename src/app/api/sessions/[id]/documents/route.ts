@@ -2,9 +2,11 @@ import { db } from "@/db";
 import { documents, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { extractFromText, SAMPLE_DOCUMENTS } from "@/lib/ocr";
+import { structureDocument } from "@/lib/doc-structure";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
@@ -43,7 +45,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     facilityName = sample.facilityName;
   }
 
-  const extractedJson = extractFromText(sourceText, docType);
+    const localJson = extractFromText(sourceText, docType);
+
+  // ── LLM structuring pass (feature 5): messy paper → clean record ────────
+  // Real uploads/pastes only — sample documents keep the instant-demo fast.
+  // Regex extraction is the floor; the AI can only ADD unseen items.
+  let extractedJson: typeof localJson & { structuredBy?: string } = localJson;
+  if (!body.sampleId && sourceText.trim().length >= 40) {
+    try {
+      extractedJson = await structureDocument(sourceText, docType, localJson);
+    } catch {
+      extractedJson = localJson; // never block an upload on AI
+    }
+  }
 
   const [doc] = await db
     .insert(documents)

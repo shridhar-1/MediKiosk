@@ -74,7 +74,7 @@ type DocRow = {
   docType: string;
   documentDate: string | null;
   facilityName: string | null;
-  extractedJson: ExtractedDocument | null;
+  extractedJson: (import("@/db/schema").ExtractedDocument & { structuredBy?: string }) | null;
 };
 
 const ICONS: Record<string, typeof HeartPulse> = {
@@ -1587,8 +1587,13 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                               {d.extractedJson.labs.filter((l) => l.abnormal).length} {t("abnormalValues", lang)}
                             </span>
                           )}
-                          {d.extractedJson.medications.length} {t("medicinesWord", lang)} ·{" "}
+                                                    {d.extractedJson.medications.length} {t("medicinesWord", lang)} ·{" "}
                           {d.extractedJson.diagnoses.length} {t("diagnosesWord", lang)}
+                        </p>
+                      )}
+                      {d.extractedJson?.structuredBy?.startsWith("AI") && (
+                        <p className="mt-1 text-xs font-semibold text-[#0f5c61]">
+                          ✨ Structured by {d.extractedJson.structuredBy}
                         </p>
                       )}
                     </li>
