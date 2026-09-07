@@ -9,7 +9,8 @@ import {
 import type { AyushAssessment } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { summarizeDocuments } from "@/lib/ocr";
-import { evaluateRedFlags, withPatientCancellation } from "@/lib/redflags";
+import { evaluateRedFlags, mergeRedFlagResults, withPatientCancellation } from "@/lib/redflags";
+import { checkDrugSafety, drugSafetyResult } from "@/lib/drug-safety";
 import { engineOrder } from "@/lib/ai-router";
 import { answersMap } from "@/lib/session-data";
 import { generateSummaryFields } from "@/lib/summary";
@@ -361,8 +362,7 @@ export async function generateSummaryForSession(sessionId: string): Promise<{
     const map = answersMap(answerRows);
   // Emergency may have been cancelled by the patient at the kiosk (false
   // alarm, two-tap confirm) — respect it: urgent, never silent, doctor sees.
-  const flags = withPatientCancellation(session.emergencyCancelledAt, evaluateRedFlags(map));
-  const { investigationsSummary, medicationsExtracted } = summarizeDocuments(docs);
+   const { investigationsSummary, medicationsExtracted } = summarizeDocuments(docs);
   const localFields = generateSummaryFields(
     patient,
     map,
@@ -370,6 +370,22 @@ export async function generateSummaryForSession(sessionId: string): Promise<{
     investigationsSummary,
     medicationsExtracted,
   ) as SummaryFields;
+  // ── Drug-safety layer (deterministic, rules-as-data) ───────────────────
+  // Allergy conflicts + drug–drug + drug–condition + vitals said out loud,
+  // merged with the symptom flags — one priority, one audit trail.
+  const saidEverything = Object.values(map)
+    .map((a) => `${a.text ?? ""} ${(a.values ?? []).join(" ")}`)
+    .join(" ");
+  const drugFired = checkDrugSafety({
+    allergies: localFields.allergies ?? "",
+    medications: `${localFields.drugs ?? ""} ${medicationsExtracted ?? ""}`,
+    conditionsText: saidEverything,
+    transcript: saidEverything,
+  });
+  const flags = withPatientCancellation(
+    session.emergencyCancelledAt,
+    mergeRedFlagResults(evaluateRedFlags(map), drugSafetyResult(drugFired)),
+  );
   const answersText = Object.entries(map)
     .map(([key, ans]) => {
       const value = (ans.text ?? "").trim() || (ans.values ?? []).join(", ");
