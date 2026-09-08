@@ -183,7 +183,11 @@ async function viaGemini(sourceText: string, docType: string): Promise<Extracted
           signal: AbortSignal.timeout(25_000),
           body: JSON.stringify({
             contents: [{ parts: [{ text: `${SYSTEM}\n\n${userPrompt(sourceText, docType)}` }] }],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 900 },
+            generationConfig: (() => {
+              const cfg: Record<string, unknown> = { temperature: 0.1, maxOutputTokens: 4096 };
+              if (model.includes("2.5")) cfg.thinkingConfig = { thinkingBudget: 0 };
+              return cfg;
+            })(),
           }),
         },
       );
@@ -247,17 +251,26 @@ type RawVision = RawDoc & { transcript?: unknown };
 
 type VisionResult = { doc: ExtractedDocument; transcript: string; label: string };
 
-async function viaGeminiVision(b64: string, docType: string): Promise<VisionResult | null> {
+async function viaGeminiVision(
+  b64: string,
+  docType: string,
+): Promise<{ ok: VisionResult | null; debug: string }> {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) return null;
+  if (!key) return { ok: null, debug: "GEMINI_API_KEY not set" };
+  const notes: string[] = [];
   for (const model of GEMINI_MODELS) {
     try {
+      // 2.5-family models THINK by default — thinking tokens eat the whole
+      // output budget and the answer comes back empty. Disable thinking
+      // there, and give every model a generous output budget.
+      const generationConfig: Record<string, unknown> = { temperature: 0.1, maxOutputTokens: 4096 };
+      if (model.includes("2.5")) generationConfig.thinkingConfig = { thinkingBudget: 0 };
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(30_000),
+          signal: AbortSignal.timeout(45_000),
           body: JSON.stringify({
             contents: [
               {
@@ -267,26 +280,43 @@ async function viaGeminiVision(b64: string, docType: string): Promise<VisionResu
                 ],
               },
             ],
-            generationConfig: { temperature: 0.1, maxOutputTokens: 1400 },
+            generationConfig,
           }),
         },
       );
-      if (!res.ok) continue; // model retired/unavailable → try the next one
-      const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (!raw) continue;
+      if (!res.ok) {
+        notes.push(`${model}: HTTP ${res.status}`);
+        continue;
+      }
+      const data = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
+        promptFeedback?: { blockReason?: string };
+      };
+      if (data.promptFeedback?.blockReason) {
+        notes.push(`${model}: blocked (${data.promptFeedback.blockReason})`);
+        continue;
+      }
+      const cand = data.candidates?.[0];
+      const raw = cand?.content?.parts?.map((pt) => pt.text ?? "").join("").trim();
+      if (!raw) {
+        notes.push(`${model}: empty (finish=${cand?.finishReason ?? "?"})`);
+        continue;
+      }
       const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
       const parsed = JSON.parse(json) as RawVision;
       return {
-        doc: coerceAi(parsed),
-        transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
-        label: `AI · ${model} 👁`,
+        ok: {
+          doc: coerceAi(parsed),
+          transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
+          label: `AI · ${model} 👁`,
+        },
+        debug: `${model}: ok`,
       };
-    } catch {
-      /* next model */
+    } catch (e) {
+      notes.push(`${model}: ${e instanceof Error ? e.message.slice(0, 80) : "error"}`);
     }
   }
-  return null;
+  return { ok: null, debug: notes.join(" | ") || "no models tried" };
 }
 
 /**
@@ -298,12 +328,12 @@ async function viaGeminiVision(b64: string, docType: string): Promise<VisionResu
 export async function readDocumentByVision(
   imageBase64: string,
   docType: string,
-): Promise<VisionResult | null> {
+): Promise<{ ok: VisionResult | null; debug: string }> {
   const b64 = imageBase64.replace(/^data:[^,]+,/, "");
-  if (b64.length < 500 || b64.length > 6_000_000) return null;
+  if (b64.length < 500 || b64.length > 6_000_000) {
+    return { ok: null, debug: `image size out of range (${b64.length} chars b64)` };
+  }
   // Groq retired its vision models (2026) — Gemini Flash is the vision lane.
-  // Requires GEMINI_API_KEY; without it this returns null and the honest
-  // regex floor holds.
   return await viaGeminiVision(b64, docType);
 }
 

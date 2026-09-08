@@ -53,19 +53,22 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const weakText = sourceText.trim().length < 40 || (ocrConfidence !== null && ocrConfidence < 45);
   let visionExtracted: import("@/db/schema").ExtractedDocument | null = null;
   let visionLabel = "";
+  let visionDebug = "";
   if (body.imageBase64 && !body.sampleId && weakText) {
     try {
       const v = await readDocumentByVision(body.imageBase64, docType);
-      if (v) {
-        visionExtracted = v.doc;
-        visionLabel = v.label;
+      if (v.ok) {
+        visionExtracted = v.ok.doc;
+        visionLabel = v.ok.label;
         // if Tesseract read nothing (or only garbage), the vision transcript
         // becomes the document's text — searchable, askable, citable
         const useTranscript = !sourceText.trim() || (ocrConfidence !== null && ocrConfidence < 45);
-        if (useTranscript && v.transcript.trim()) sourceText = v.transcript;
+        if (useTranscript && v.ok.transcript.trim()) sourceText = v.ok.transcript;
+      } else {
+        visionDebug = v.debug;
       }
-    } catch {
-      /* floor holds */
+    } catch (e) {
+      visionDebug = e instanceof Error ? e.message : "vision error";
     }
   }
 
@@ -101,7 +104,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     })
     .returning();
 
-  return Response.json({ document: doc });
+  return Response.json({ document: doc, visionDebug: visionDebug || undefined });
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
