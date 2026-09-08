@@ -334,17 +334,12 @@ export async function readDocumentByVision(
   imageBase64: string,
   docType: string,
 ): Promise<VisionResult | null> {
-  const b64 = imageBase64.replace(/^data:[^,]+,/, "");
+    const b64 = imageBase64.replace(/^data:[^,]+,/, "");
   if (b64.length < 500 || b64.length > 6_000_000) return null;
-  for (const engine of engineOrder("extract")) {
-    if (engine === "ollama") continue; // local models vary — cloud vision only
-    const r =
-      engine === "gemini" ? await viaGeminiVision(b64, docType)
-      : engine === "groq" ? await viaGroqVision(b64, docType)
-      : null;
-    if (r) return r;
-  }
-  return null;
+  // Groq retired its vision models (2026) — Gemini Flash is the vision lane.
+  // Requires GEMINI_API_KEY; without it this returns null and the honest
+  // regex floor holds.
+  return await viaGeminiVision(b64, docType);
 }
 
 /** Public merge with an explicit engine label (used by the vision path). */
