@@ -180,3 +180,23 @@ export function getOcrStatus() {
     ],
   };
 }
+// Downscale a camera photo for the vision-AI lane (handwriting reading).
+// Keeps the payload small (~200-400 KB) so it fits serverless body limits.
+export async function fileToDownscaledBase64(file: File, max = 1024): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas not available");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+    return dataUrl.split(",")[1] ?? "";
+  } finally {
+    bitmap.close();
+  }
+}

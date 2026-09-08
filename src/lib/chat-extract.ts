@@ -64,6 +64,17 @@ const MORE_INFO_REPLY: Record<string, string> = {
   bn: "আপনার স্বাস্থ্য সমস্যা সম্পর্কে আরেকটু বলুন।",
   mr: "कृपया तुमच्या आरोग्य समस्येबद्दल अजून थोडे सांगा.",
 };
+// Answered when the patient asks what the assistant can help with —
+// never a repeat of "tell me your problem" (evaluator-tested behaviour).
+const CAPABILITY_REPLY: Record<string, string> = {
+  en: 'I can help with fever, cough and cold, pain, stomach problems, sugar and BP, skin issues and more. Please tell me what problem you have — for example: "I have fever since 2 days."',
+  hi: 'मैं बुखार, खांसी-जुकाम, दर्द, पेट की समस्या, शुगर और बीपी, त्वचा की समस्या आदि में मदद कर सकता हूँ। कृपया अपनी समस्या बताइए — जैसे: "मुझे 2 दिन से बुखार है।"',
+  kn: 'ಜ್ವರ, ಕೆಮ್ಮು-ಶೀತ, ನೋವು, ಹೊಟ್ಟೆ ಸಮಸ್ಯೆ, ಸಕ್ಕರೆ ಮತ್ತು ರಕ್ತದೊತ್ತಡ, ಚರ್ಮದ ಸಮಸ್ಯೆಗಳಲ್ಲಿ ನಾನು ಸಹಾಯ ಮಾಡಬಲ್ಲೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸಮಸ್ಯೆಯನ್ನು ಹೇಳಿ — ಉದಾಹರಣೆಗೆ: "ನನಗೆ 2 ದಿನದಿಂದ ಜ್ವರ ಇದೆ."',
+  ta: 'காய்ச்சல், இருமல்-சளி, வலி, வயிற்று பிரச்சனை, சர்க்கரை மற்றும் ரத்த அழுத்தம், தோல் பிரச்சனைகளில் நான் உதவ முடியும். உங்கள் பிரச்சனையை சொல்லுங்கள் — உதாரணமாக: "எனக்கு 2 நாட்களாக காய்ச்சல்."',
+  te: 'జ్వరం, దగ్గు-జలుబు, నొప్పి, కడుపు సమస్యలు, చక్కెర మరియు బిపి, చర్మ సమస్యలలో నేను సహాయం చేయగలను. మీ సమస్య చెప్పండి — ఉదాహరణకు: "నాకు 2 రోజులుగా జ్వరం."',
+  bn: 'জ্বর, কাশি-সর্দি, ব্যথা, পেটের সমস্যা, ডায়াবেটিস ও বিপি, চর্মরোগে আমি সাহায্য করতে পারি। আপনার সমস্যা বলুন — যেমন: "আমার ২ দিন ধরে জ্বর।"',
+  mr: 'ताप, खोकला-सर्दी, दुखणे, पोटाच्या समस्या, साखर व बीपी, त्वचारोग यांमध्ये मी मदत करू शकतो. तुमची समस्या सांगा — उदाहरणार्थ: "मला २ दिवसांपासून ताप आहे."',
+};
 
 const Q_MEDS: Record<string, string> = {
   en: "Do you take any medicines regularly?",
@@ -110,7 +121,11 @@ function systemPrompt(lang: string): string {
     "From the WHOLE conversation so far: " +
     "(1) Decide if the patient is describing a health problem. Greetings, thanks, " +
     "or unrelated chat are NOT medical — set isMedical false and reply with one " +
-    "short warm line in " + language + " inviting them to describe their problem. " +
+        "short warm line in " + language + " inviting them to describe their problem. " +
+    "If the patient asks what you can help with ('which problems', 'what can you " +
+    "do'), answer honestly in one short line — fever, cough/cold, pain, stomach " +
+    "problems, sugar/BP, skin issues — then invite them to describe theirs. " +
+    "Never repeat your previous reply word-for-word — vary the wording. " +
     "(2) A SHORT ANSWER to your previous question (yes / no / none, in any " +
     "language: ಹೌದು / ಇಲ್ಲ / हाँ / नहीं / ஆம் / இல்லை) IS part of the medical " +
     "conversation — interpret it as the answer to exactly that question. 'No' " +
@@ -212,6 +227,21 @@ function isChitchat(text: string): boolean {
   const t = text.trim();
   if (t.length === 0) return true;
   return t.length <= 24 && CHITCHAT.test(t);
+}
+// "Which type problems?" / "what can you do?" — a question ABOUT the
+// assistant. Gets a real answer (what we help with), never a repetitive
+// "tell me your problem". Only for short questions WITHOUT symptom words —
+// "what type of disease I have, I have fever" is a symptom message.
+const CAPABILITY_RE =
+  /(which|what)\s+(type|kind|sort)s?\s+(of\s+)?(problem|issue|disease|illness|sickness)|what\s+can\s+you\s+(do|help)|what\s+do\s+you\s+(do|treat|handle)|which\s+(problems|diseases)|how\s+(do|does)\s+(you|this|it)\s+work|who\s+are\s+you|what\s+is\s+this|ಯಾವ\s+ರೀತಿಯ|ಸಹಾಯ\s+ಮಾಡು|ನೀವು\s+ಯಾವುದನ್ನು|किस\s+(तरह|प्रकार)\s+की|क्या\s+मदद|मदद\s+कर\s+सकते|क्या\s+कर\s+सकते|என்ன\s+உதவி|என்ன\s+செய்ய|ఏమి\s+సహాయం|మీరు\s+ఏమి|কী\s+সাহায্য|কি\s+করতে\s+পার/i;
+const SYMPTOM_WORDS =
+  /fever|pain|ache|cough|cold|headache|vomit|loose|sugar|bp|blood pressure|since|dizzy|weak|rash|swell|breath|chest|stomach|ज्वर|बुखार|दर्द|खांसी|पेट|ಜ್ವರ|ನೋವು|ಕೆಮ್ಮು|ಹೊಟ್ಟೆ|காய்ச்சல்|வலி|జ్వరం|నొప్పి|জ্বর|ব্যথা|তাপ/i;
+
+function isCapabilityQuestion(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0 || t.length > 80) return false;
+  if (SYMPTOM_WORDS.test(t)) return false;
+  return CAPABILITY_RE.test(t);
 }
 
 // Bare yes / no in any supported language — an ANSWER, never chit-chat.
@@ -418,6 +448,18 @@ export async function extractIntake(text: string, history: ChatTurn[] = [], lang
     return {
       isMedical: false,
       reply: pick(GREETING_REPLY, lang),
+      extracted: emptyExtracted(),
+      followUp: "",
+      engine: "intake-guard",
+      aiUsed: false,
+    };
+  }
+    // "Which type problems can you help with?" → a real, helpful answer —
+  // never a repeat of "tell me your problem".
+  if (isCapabilityQuestion(clean)) {
+    return {
+      isMedical: false,
+      reply: pick(CAPABILITY_REPLY, lang),
       extracted: emptyExtracted(),
       followUp: "",
       engine: "intake-guard",

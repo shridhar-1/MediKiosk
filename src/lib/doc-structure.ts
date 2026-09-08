@@ -228,6 +228,129 @@ async function viaOllama(sourceText: string, docType: string): Promise<Extracted
  * Regex floor + AI pass. Never blocks: if no AI answers, the local regex
  * extraction is returned unchanged, labelled "rules".
  */
+// ── Vision lane: handwriting Tesseract cannot read ─────────────────────────
+const SYSTEM_VISION =
+  "You are reading a photograph of a handwritten medical document from an " +
+  "Indian hospital — a prescription, lab report, or case notes. Read the " +
+  "handwriting carefully. Use ONLY what is actually written — never invent, " +
+  "never guess a medicine or a value. Return ONLY valid JSON, no markdown: " +
+  '{"transcript":"faithful plain text of everything written, as best you can read it",' +
+  '"medications":[{"name":"","dose":"","frequency":"","duration":""}],' +
+  '"labs":[{"name":"","value":"","unit":"","reference":"","abnormal":false,"flag":null}],' +
+  '"diagnoses":[""],"procedures":[""],"notes":"one short line: what this document is"} ' +
+  "Rules: medicine names exactly as written; values as strings; mark a lab " +
+  "abnormal only if outside the printed reference range; empty arrays when " +
+  "you cannot read a section.";
+
+type RawVision = RawDoc & { transcript?: unknown };
+
+type VisionResult = { doc: ExtractedDocument; transcript: string; label: string };
+
+async function viaGeminiVision(b64: string, docType: string): Promise<VisionResult | null> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
+                { inline_data: { mime_type: "image/jpeg", data: b64 } },
+              ],
+            },
+          ],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 1400 },
+        }),
+      },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!raw) return null;
+    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as RawVision;
+    return {
+      doc: coerceAi(parsed),
+      transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
+      label: "AI · gemini-2.0-flash 👁",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function viaGroqVision(b64: string, docType: string): Promise<VisionResult | null> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(45_000),
+      body: JSON.stringify({
+        model: "meta-llama/llama-4-scout-17b-16e-instruct",
+        temperature: 0.1,
+        max_tokens: 1400,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } },
+            ],
+          },
+        ],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if (!raw) return null;
+    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as RawVision;
+    return {
+      doc: coerceAi(parsed),
+      transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
+      label: "AI · llama-4-scout 👁",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Handwriting pass: send the PHOTO itself to a vision model. Returns the
+ * structured record plus a faithful transcript (stored as the document's
+ * text so Ask-the-Record and summaries can cite it). Null when no vision
+ * engine answers — the regex floor then holds, honestly.
+ */
+export async function readDocumentByVision(
+  imageBase64: string,
+  docType: string,
+): Promise<VisionResult | null> {
+  const b64 = imageBase64.replace(/^data:[^,]+,/, "");
+  if (b64.length < 500 || b64.length > 6_000_000) return null;
+  for (const engine of engineOrder("extract")) {
+    if (engine === "ollama") continue; // local models vary — cloud vision only
+    const r =
+      engine === "gemini" ? await viaGeminiVision(b64, docType)
+      : engine === "groq" ? await viaGroqVision(b64, docType)
+      : null;
+    if (r) return r;
+  }
+  return null;
+}
+
+/** Public merge with an explicit engine label (used by the vision path). */
+export function mergeWithLabel(local: ExtractedDocument, ai: ExtractedDocument, label: string): StructuredDocument {
+  return { ...merge(local, ai), structuredBy: label };
+}
 export async function structureDocument(
   sourceText: string,
   docType: string,

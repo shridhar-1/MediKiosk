@@ -2,7 +2,7 @@ import { db } from "@/db";
 import { documents, sessions } from "@/db/schema";
 import { nid } from "@/lib/ids";
 import { extractFromText, SAMPLE_DOCUMENTS } from "@/lib/ocr";
-import { structureDocument } from "@/lib/doc-structure";
+import { structureDocument, readDocumentByVision, mergeWithLabel } from "@/lib/doc-structure";
 import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
@@ -24,9 +24,11 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     docType?: string;
     fileName?: string;
     mimeType?: string;
-    sourceText?: string;
+        sourceText?: string;
     documentDate?: string;
     facilityName?: string;
+    imageBase64?: string; // camera photo (downscaled) — for the handwriting vision lane
+    ocrConfidence?: number; // Tesseract confidence 0-100 — low means handwriting
   };
 
   let sourceText = body.sourceText ?? "";
@@ -45,13 +47,37 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     facilityName = sample.facilityName;
   }
 
-    const localJson = extractFromText(sourceText, docType);
+      // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
+  // vision AI reads the image itself and returns structure + a transcript.
+  const ocrConfidence = typeof body.ocrConfidence === "number" ? body.ocrConfidence : null;
+  const weakText = sourceText.trim().length < 40 || (ocrConfidence !== null && ocrConfidence < 45);
+  let visionExtracted: import("@/db/schema").ExtractedDocument | null = null;
+  let visionLabel = "";
+  if (body.imageBase64 && !body.sampleId && weakText) {
+    try {
+      const v = await readDocumentByVision(body.imageBase64, docType);
+      if (v) {
+        visionExtracted = v.doc;
+        visionLabel = v.label;
+        // if Tesseract read nothing (or only garbage), the vision transcript
+        // becomes the document's text — searchable, askable, citable
+        const useTranscript = !sourceText.trim() || (ocrConfidence !== null && ocrConfidence < 45);
+        if (useTranscript && v.transcript.trim()) sourceText = v.transcript;
+      }
+    } catch {
+      /* floor holds */
+    }
+  }
+
+  const localJson = extractFromText(sourceText, docType);
 
   // ── LLM structuring pass (feature 5): messy paper → clean record ────────
   // Real uploads/pastes only — sample documents keep the instant-demo fast.
   // Regex extraction is the floor; the AI can only ADD unseen items.
   let extractedJson: typeof localJson & { structuredBy?: string } = localJson;
-  if (!body.sampleId && sourceText.trim().length >= 40) {
+  if (!body.sampleId && visionExtracted) {
+    extractedJson = mergeWithLabel(localJson, visionExtracted, visionLabel);
+  } else if (!body.sampleId && sourceText.trim().length >= 40) {
     try {
       extractedJson = await structureDocument(sourceText, docType, localJson);
     } catch {

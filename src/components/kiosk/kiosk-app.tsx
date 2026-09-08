@@ -12,7 +12,7 @@ import {
   YES_NO_OPTIONS,
 } from "@/lib/interview";
 import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
-import { performOCR, isValidDocumentFile } from "@/lib/document-ocr";
+import { performOCR, isValidDocumentFile, fileToDownscaledBase64 } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { classifyUtterance } from "@/lib/utterance-guard";
 import type { ExtractedIntake } from "@/lib/chat-extract";
@@ -510,19 +510,34 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setUploading(true);
     setOcrProgress(0);
     setError("");
-    try {
+        try {
       let sourceText = "";
       let fileName = file.name;
+      let imageBase64: string | undefined;
+      let ocrConfidence: number | undefined;
+      // photos also go to the handwriting vision lane (downscaled, ~300 KB)
+      if (file.type.startsWith("image/")) {
+        try {
+          imageBase64 = await fileToDownscaledBase64(file);
+        } catch {
+          /* vision is optional — Tesseract still runs */
+        }
+      }
       if (file.type.startsWith("image/") || file.type === "application/pdf") {
         const ocrResult = await performOCR(file, (progress) => {
           setOcrProgress(progress);
         });
         sourceText = ocrResult.text;
-        if (!sourceText.trim()) {
+        ocrConfidence = Math.round((ocrResult.confidence ?? 1) * 100);
+        // handwriting: Tesseract often reads nothing — the vision AI can
+        if (!sourceText.trim() && !imageBase64) {
           throw new Error("OCR could not extract text from image. Try a clearer photo.");
         }
       } else {
         sourceText = await file.text();
+      }
+      if (!sourceText.trim() && imageBase64) {
+        setOcrProgress(60); // reading the handwriting with vision AI…
       }
       const res = await fetch(`/api/sessions/${sessionId}/documents`, {
         method: "POST",
@@ -532,6 +547,8 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           fileName,
           mimeType: file.type,
           sourceText,
+          imageBase64,
+          ocrConfidence,
         }),
       });
       const data = (await res.json()) as { document: DocRow };
