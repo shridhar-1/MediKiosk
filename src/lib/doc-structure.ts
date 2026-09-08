@@ -168,31 +168,36 @@ async function viaGroq(sourceText: string, docType: string): Promise<ExtractedDo
   return null;
 }
 
+const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"];
+
 async function viaGemini(sourceText: string, docType: string): Promise<ExtractedDocument | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(25_000),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `${SYSTEM}\n\n${userPrompt(sourceText, docType)}` }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 900 },
-        }),
-      },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!raw) return null;
-    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-    return coerceAi(JSON.parse(json) as RawDoc);
-  } catch {
-    return null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(25_000),
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `${SYSTEM}\n\n${userPrompt(sourceText, docType)}` }] }],
+            generationConfig: { temperature: 0.1, maxOutputTokens: 900 },
+          }),
+        },
+      );
+      if (!res.ok) continue;
+      const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (!raw) continue;
+      const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+      return coerceAi(JSON.parse(json) as RawDoc);
+    } catch {
+      /* next model */
+    }
   }
+  return null;
 }
 
 async function viaOllama(sourceText: string, docType: string): Promise<ExtractedDocument | null> {
@@ -224,10 +229,6 @@ async function viaOllama(sourceText: string, docType: string): Promise<Extracted
   }
 }
 
-/**
- * Regex floor + AI pass. Never blocks: if no AI answers, the local regex
- * extraction is returned unchanged, labelled "rules".
- */
 // ── Vision lane: handwriting Tesseract cannot read ─────────────────────────
 const SYSTEM_VISION =
   "You are reading a photograph of a handwritten medical document from an " +
@@ -249,79 +250,43 @@ type VisionResult = { doc: ExtractedDocument; transcript: string; label: string 
 async function viaGeminiVision(b64: string, docType: string): Promise<VisionResult | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(30_000),
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
-                { inline_data: { mime_type: "image/jpeg", data: b64 } },
-              ],
-            },
-          ],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 1400 },
-        }),
-      },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!raw) return null;
-    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-    const parsed = JSON.parse(json) as RawVision;
-    return {
-      doc: coerceAi(parsed),
-      transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
-      label: "AI · gemini-2.0-flash 👁",
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function viaGroqVision(b64: string, docType: string): Promise<VisionResult | null> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) return null;
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(45_000),
-      body: JSON.stringify({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        temperature: 0.1,
-        max_tokens: 1400,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } },
+  for (const model of GEMINI_MODELS) {
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(30_000),
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
+                  { inline_data: { mime_type: "image/jpeg", data: b64 } },
+                ],
+              },
             ],
-          },
-        ],
-      }),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const raw = data.choices?.[0]?.message?.content?.trim();
-    if (!raw) return null;
-    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-    const parsed = JSON.parse(json) as RawVision;
-    return {
-      doc: coerceAi(parsed),
-      transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
-      label: "AI · llama-4-scout 👁",
-    };
-  } catch {
-    return null;
+            generationConfig: { temperature: 0.1, maxOutputTokens: 1400 },
+          }),
+        },
+      );
+      if (!res.ok) continue; // model retired/unavailable → try the next one
+      const data = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      if (!raw) continue;
+      const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+      const parsed = JSON.parse(json) as RawVision;
+      return {
+        doc: coerceAi(parsed),
+        transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
+        label: `AI · ${model} 👁`,
+      };
+    } catch {
+      /* next model */
+    }
   }
+  return null;
 }
 
 /**
@@ -334,7 +299,7 @@ export async function readDocumentByVision(
   imageBase64: string,
   docType: string,
 ): Promise<VisionResult | null> {
-    const b64 = imageBase64.replace(/^data:[^,]+,/, "");
+  const b64 = imageBase64.replace(/^data:[^,]+,/, "");
   if (b64.length < 500 || b64.length > 6_000_000) return null;
   // Groq retired its vision models (2026) — Gemini Flash is the vision lane.
   // Requires GEMINI_API_KEY; without it this returns null and the honest
@@ -346,6 +311,11 @@ export async function readDocumentByVision(
 export function mergeWithLabel(local: ExtractedDocument, ai: ExtractedDocument, label: string): StructuredDocument {
   return { ...merge(local, ai), structuredBy: label };
 }
+
+/**
+ * Regex floor + AI pass. Never blocks: if no AI answers, the local regex
+ * extraction is returned unchanged, labelled "rules".
+ */
 export async function structureDocument(
   sourceText: string,
   docType: string,
@@ -365,7 +335,7 @@ export async function structureDocument(
           ? `local · ${process.env.OLLAMA_MODEL || "llama3.1"}`
           : engine === "groq"
             ? `AI · ${(process.env.GROQ_MODEL || "openai/gpt-oss-120b").split("/").pop()}`
-            : "AI · gemini-2.0-flash";
+            : "AI · gemini-flash";
       return { ...merge(local, ai), structuredBy: label };
     }
   }
