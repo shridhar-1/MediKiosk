@@ -170,11 +170,47 @@ async function viaGroq(sourceText: string, docType: string): Promise<ExtractedDo
 
 const GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"];
 
+// ── Runtime model discovery: never guess model names again ─────────────────
+// The Gemini lineup changes (2026: 2.0/2.5 names 404). We ask the API which
+// models exist, cache the answer, and prefer a flash-tier generateContent
+// model. Self-heals whenever Google renames models.
+let cachedGeminiModel: string | null = null;
+
+async function pickGeminiModel(): Promise<string | null> {
+  if (cachedGeminiModel) return cachedGeminiModel;
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=100`,
+      { signal: AbortSignal.timeout(10_000) },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      models?: { name?: string; supportedGenerationMethods?: string[] }[];
+    };
+    const usable = (data.models ?? [])
+      .filter((m) => (m.supportedGenerationMethods ?? []).includes("generateContent"))
+      .map((m) => (m.name ?? "").replace(/^models\//, ""))
+      .filter(Boolean);
+    cachedGeminiModel =
+      usable.find((m) => /^gemini-[\d.]+-flash$/.test(m)) ??
+      usable.find((m) => m.includes("flash") && !m.includes("tts") && !m.includes("image-generation") && !m.includes("live")) ??
+      usable.find((m) => m.startsWith("gemini")) ??
+      null;
+    return cachedGeminiModel;
+  } catch {
+    return null;
+  }
+}
+
 async function viaGemini(sourceText: string, docType: string): Promise<ExtractedDocument | null> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
-  for (const model of GEMINI_MODELS) {
-    try {
+  const discovered = await pickGeminiModel();
+  const tryOrder = [...new Set([discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
+  for (const model of tryOrder) {
+  try {
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
         {
@@ -258,7 +294,11 @@ async function viaGeminiVision(
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: null, debug: "GEMINI_API_KEY not set" };
   const notes: string[] = [];
-  for (const model of GEMINI_MODELS) {
+  const discovered = await pickGeminiModel();
+  const tryOrder = [...new Set([discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
+  if (discovered) notes.push(`discovered: ${discovered}`);
+  for (const model of tryOrder) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       // 2.5-family models THINK by default — thinking tokens eat the whole
       // output budget and the answer comes back empty. Disable thinking
@@ -270,7 +310,7 @@ async function viaGeminiVision(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(45_000),
+          signal: AbortSignal.timeout(55_000),
           body: JSON.stringify({
             contents: [
               {
@@ -285,8 +325,12 @@ async function viaGeminiVision(
         },
       );
       if (!res.ok) {
+        if (res.status >= 500 && attempt === 1) {
+          notes.push(`${model}: HTTP ${res.status} (retrying)`);
+          continue; // overloaded — one immediate retry
+        }
         notes.push(`${model}: HTTP ${res.status}`);
-        continue;
+        break;
       }
       const data = (await res.json()) as {
         candidates?: { content?: { parts?: { text?: string }[] }; finishReason?: string }[];
@@ -313,8 +357,15 @@ async function viaGeminiVision(
         debug: `${model}: ok`,
       };
     } catch (e) {
-      notes.push(`${model}: ${e instanceof Error ? e.message.slice(0, 80) : "error"}`);
+      const msg = e instanceof Error ? e.message.slice(0, 80) : "error";
+      if (attempt === 1 && /timeout|abort/i.test(msg)) {
+        notes.push(`${model}: ${msg} (retrying)`);
+        continue;
+      }
+      notes.push(`${model}: ${msg}`);
     }
+    }
+    break;
   }
   return { ok: null, debug: notes.join(" | ") || "no models tried" };
 }
