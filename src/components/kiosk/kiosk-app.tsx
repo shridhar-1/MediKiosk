@@ -17,6 +17,7 @@ import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speec
 import { classifyUtterance } from "@/lib/utterance-guard";
 import type { ExtractedIntake } from "@/lib/chat-extract";
 import { arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
+import { roomFor } from "@/lib/facility";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
 import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
@@ -1683,6 +1684,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 <p className="mt-3 text-sm text-[#4a4338]">
                   {DEPARTMENTS.find((d) => d.id === department)?.label} · {mode}
                 </p>
+                                <p className="mt-3 text-sm text-[#4a4338]">
+                  {DEPARTMENTS.find((d) => d.id === department)?.label} · {mode}
+                </p>
+                                {location === "hospital" && (
+                  <TicketRoom department={department} emergency={Boolean(flags?.triggered)} />
+                )}
                                 {summary && (
                   <p className="mt-3 inline-block rounded-full bg-[#f6f0e4] px-3 py-1 text-[11px] font-semibold text-[#08363a]">
                     {summary.aiUsed ? `✨ AI summary ready for the doctor (${summary.engine ?? "ai"})` : "📋 Summary ready for the doctor"}
@@ -1934,6 +1941,23 @@ function ScheduleSlotBox() {
   );
 }
 
+// ── Room on the patient's token ticket ────────────────────────────────────
+// Shows which consultation room + floor to head to (from the department).
+// Emergencies are routed to the Triage Bay instead of the OPD room.
+function TicketRoom({ department, emergency }: { department: string; emergency: boolean }) {
+  const room = roomFor(department, emergency ? "emergency" : "routine");
+  return (
+    <div className="mt-3 rounded-2xl bg-[#08363a] px-3 py-2 text-left text-[#f6f0e4]">
+      <p className="text-xs font-bold uppercase tracking-wider text-[#e8d5a3]">
+        {emergency ? "🚨 Go to triage" : "Go to consultation room"}
+      </p>
+      <p className="mt-0.5 text-base font-bold">
+        {room.room} · {room.floor}
+      </p>
+      <p className="text-[11px] text-[#f6f0e4]/75">{room.wing} — {room.land}</p>
+    </div>
+  );
+}
 // ── Live queue position on the patient's token ticket ─────────────────────
 // Fetches the deterministic OPD queue once and shows how many patients are
 // ahead plus a real clock time ("Be at the hospital by 10:45 am") so the
