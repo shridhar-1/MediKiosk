@@ -16,6 +16,7 @@ export const patients = pgTable("patients", {
   age: integer("age").notNull(),
   gender: text("gender").notNull(),
   phone: text("phone"),
+  email: text("email"),
   preferredLanguage: text("preferred_language").notNull().default("en"),
   pinHash: text("pin_hash"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),

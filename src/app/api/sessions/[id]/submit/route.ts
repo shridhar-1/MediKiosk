@@ -5,32 +5,56 @@ import { notifyHospitalSubmission } from "@/lib/notify";
 import { enqueuePatientSms } from "@/lib/sms-outbox";
 import { aheadCount, arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
 import { loadSessionBundle } from "@/lib/session-data";
+import { sendPatientTokenEmail, type MailResult } from "@/lib/mail";
+import { DEPARTMENTS } from "@/lib/types";
 import { desc, eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
+
+// Public base URL used to build the patient's live-queue tracking link.
+const PUBLIC_BASE = process.env.NEXT_PUBLIC_BASE_URL ?? "https://medi-kiosk-tau.vercel.app";
+
+const deptLabel = (id: string) =>
+  DEPARTMENTS.find((d) => d.id === id)?.label ?? id.replace(/_/g, " ");
+
+// Send the patient's token / appointment by EMAIL (in addition to SMS which
+// is enqueued separately). Best-effort — never blocks the submission.
+async function emailPatientReceipt(opts: {
+  email?: string | null;
+  fullName: string;
+  token?: string | null;
+  department: string;
+  mode: string;
+  arrivalLine: string;
+  scheduled?: boolean;
+}): Promise<MailResult | null> {
+  if (!opts.email?.trim()) return null;
+  return sendPatientTokenEmail({
+    to: opts.email,
+    fullName: opts.fullName,
+    token: opts.token,
+    departmentLabel: deptLabel(opts.department),
+    mode: opts.mode,
+    arrivalLine: opts.arrivalLine,
+    scheduled: opts.scheduled,
+    trackUrl: PUBLIC_BASE,
+  });
+}
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   const bundle = await loadSessionBundle(id);
   if (!bundle) return Response.json({ error: "Not found" }, { status: 404 });
 
-  // ── WHERE IS THE PATIENT? ─────────────────────────────────────────────
-  // "home"  → pre-registration: status "scheduled", gets an appointment slot
-  //           (NOT in the live queue — the doctor is not calling them yet).
-  // "hospital" → live queue: status "submitted", Call-next + board as usual.
-  // EMERGENCY overrides home: a red-flagged patient is always pushed into
-  // the live queue with "reach the hospital now".
   const isHome = bundle.session.location === "home" && bundle.session.priority !== "emergency";
 
   await db
     .update(sessions)
-    .set({
-      status: isHome ? "scheduled" : "submitted",
-      submittedAt: new Date(),
-    })
+    .set({ status: isHome ? "scheduled" : "submitted", submittedAt: new Date() })
     .where(eq(sessions.id, id));
 
   const [patient] = await db.select().from(patients).where(eq(patients.id, bundle.session.patientId));
+  const patientEmail = (patient?.email ?? bundle.patient.email) || null;
 
   const fhirBundle = {
     resourceType: "Bundle",
@@ -44,9 +68,7 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
           id: bundle.patient.id,
           name: [{ text: bundle.patient.fullName }],
           gender: bundle.patient.gender,
-          identifier: patient?.abhaId
-            ? [{ system: "https://healthid.ndhm.gov.in", value: patient.abhaId }]
-            : [],
+          identifier: patient?.abhaId ? [{ system: "https://healthid.ndhm.gov.in", value: patient.abhaId }] : [],
         },
       },
       {
@@ -81,9 +103,6 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
 
   const [session] = await db.select().from(sessions).where(eq(sessions.id, id));
 
-  // ── AUTOMATED HOSPITAL NOTIFICATION ─────────────────────────────────────
-  // Fires the moment the form is submitted: console alert event + email +
-  // WhatsApp + SMS (channels without env config degrade to "mock", never throw).
   const latestFlags = await db
     .select({ priority: sessions.priority, reasons: sessions.redFlagReasons, department: sessions.department, token: sessions.tokenNumber })
     .from(sessions)
@@ -106,49 +125,42 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
     },
   });
 
-  // ── PATIENT TOKEN SMS (via hospital's Android SMS-gateway phone) ────────
-  // Queued in sms_outbox; the gateway phone polls /api/sms/outbox and sends
-  // it from the hospital SIM's free daily SMS pack. Never throws.
   const allSessions = await db.select().from(sessions);
   const ahead = aheadCount(allSessions, id);
 
   if (isHome) {
-    // ── HOME BOOKING: scheduled appointment, not the live queue ──────────
-    // Slot = after everyone currently waiting (15-min minimum). The booking
-    // expires 30 minutes after the slot if the patient never arrives.
+    // ── HOME BOOKING: scheduled appointment ─────────────────────────────
     const SCHEDULE_GRACE_MINUTES = 30;
     const slot = scheduleSlot(ahead);
     const slotLabel = formatClockTime(slot);
     await db
       .update(sessions)
-      .set({
-        scheduledAt: slot,
-        expiresAt: new Date(slot.getTime() + SCHEDULE_GRACE_MINUTES * 60_000),
-      })
+      .set({ scheduledAt: slot, expiresAt: new Date(slot.getTime() + SCHEDULE_GRACE_MINUTES * 60_000) })
       .where(eq(sessions.id, id));
     await enqueuePatientSms(
       patient?.phone,
       `MediKiosk: Appointment confirmed. Token ${session?.tokenNumber ?? "-"} - your slot is ${slotLabel}. Please arrive 10 minutes early. - District Hospital`,
       "token",
     );
-    return Response.json({ session, event, notifications, scheduled: true, scheduledAt: slot });
+    const emailResult = await emailPatientReceipt({
+      email: patientEmail,
+      fullName: bundle.patient.fullName,
+      token: session?.tokenNumber,
+      department: session?.department ?? "general_medicine",
+      mode: session?.mode ?? "allopathic",
+      scheduled: true,
+      arrivalLine: `Your appointment is for ${slotLabel}. Please arrive 10 minutes early.`,
+    });
+    return Response.json({ session, event, notifications, scheduled: true, scheduledAt: slot, patientDelivery: { email: emailResult } });
   }
 
-  // ── IN HOSPITAL: live queue position + arrive-by time ──────────────────
+  // ── IN HOSPITAL: live queue position + arrive-by time ─────────────────
   const arriveBy = formatClockTime(arriveByTime(ahead));
-  // ── TOKEN EXPIRY ──────────────────────────────────────────────────────
-  // Emergency tokens never expire. Others expire 10 minutes after the
-  // arrive-by time if the patient never shows (no-show → queue slot freed).
   const TOKEN_GRACE_MINUTES = 10;
   const priority = (latestFlags[0]?.priority as string) ?? "routine";
-  const expiresAt =
-    priority === "emergency"
-      ? null
-      : new Date(arriveByTime(ahead).getTime() + TOKEN_GRACE_MINUTES * 60_000);
+  const expiresAt = priority === "emergency" ? null : new Date(arriveByTime(ahead).getTime() + TOKEN_GRACE_MINUTES * 60_000);
   await db.update(sessions).set({ expiresAt }).where(eq(sessions.id, id));
-  const validUntil = formatClockTime(
-    new Date(arriveByTime(ahead).getTime() + TOKEN_GRACE_MINUTES * 60_000),
-  );
+  const validUntil = formatClockTime(new Date(arriveByTime(ahead).getTime() + TOKEN_GRACE_MINUTES * 60_000));
   await enqueuePatientSms(
     patient?.phone,
     ahead === 0
@@ -156,6 +168,18 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
       : `MediKiosk: Your token is ${session?.tokenNumber ?? "-"}. ${ahead} ahead of you - be at the hospital by ${arriveBy} (token valid until ${validUntil}). - District Hospital`,
     "token",
   );
+  const emailResult = await emailPatientReceipt({
+    email: patientEmail,
+    fullName: bundle.patient.fullName,
+    token: session?.tokenNumber,
+    department: session?.department ?? "general_medicine",
+    mode: session?.mode ?? "allopathic",
+    scheduled: false,
+    arrivalLine:
+      ahead === 0
+        ? `It is your turn now — please go to the OPD (valid until ${validUntil}).`
+        : `${ahead} ${ahead === 1 ? "patient" : "patients"} ahead of you — be at the hospital by ${arriveBy} (valid until ${validUntil}).`,
+  });
 
-  return Response.json({ session, event, notifications });
+  return Response.json({ session, event, notifications, patientDelivery: { email: emailResult } });
 }

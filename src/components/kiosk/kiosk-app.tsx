@@ -103,6 +103,7 @@ export type KioskAccount = {
   age: number;
   gender: string;
   phone: string | null;
+  email?: string | null;
   abhaId: string | null;
   aadhaarLast4: string | null;
   preferredLanguage: string;
@@ -123,6 +124,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     age: account ? String(account.age) : "",
     gender: account?.gender ?? "male",
     phone: account?.phone ?? "",
+    email: account?.email ?? "",
   });
 
   // State for previous submissions
@@ -287,6 +289,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     const profile = {
       fullName: form.fullName || account?.fullName || "Patient",
       phoneNumber: form.phone || account?.phone || "",
+      email: form.email || account?.email || "",
       abhaId: form.abhaId || account?.abhaId || "",
     };
     localStorage.setItem("patient_profile", JSON.stringify(profile));
@@ -309,6 +312,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
             age: Number(form.age),
             gender: form.gender,
             phone: form.phone || undefined,
+            email: form.email?.trim() || undefined,
             preferredLanguage: lang,
           }),
         });
@@ -753,7 +757,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     type="button"
                     onClick={() => {
                       setUseAccount(false);
-                      setForm({ abhaId: "", aadhaarLast4: "", fullName: "", age: "", gender: "male", phone: "" });
+                      setForm({ abhaId: "", aadhaarLast4: "", fullName: "", age: "", gender: "male", phone: "", email: "" });
                       setPastSubmissions([]);
                     }}
                     className="mt-3 rounded-full bg-[#e8d5a3] px-4 py-1.5 text-xs font-semibold text-[#08363a] hover:bg-white"
@@ -897,6 +901,14 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </label>
                 </div>
                 <Field label={t("phone", lang)} value={form.phone} onChange={(v) => setForm({ ...form, phone: v.replace(/\D/g, "").slice(0, 10) })} />
+                <Field
+                  label="Email (optional — for your token & live-status link)"
+                  value={form.email}
+                  type="email"
+                  autoComplete="email"
+                  onChange={(v) => setForm({ ...form, email: v.trim() })}
+                  placeholder="you@example.com"
+                />
               </div>
 
               <Nav
@@ -1718,7 +1730,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     stopSpeaking();
                     setStep("language");
                     setIdentifyTab("abha");
-                    setForm({ abhaId: "", aadhaarLast4: "", fullName: "", age: "", gender: "male", phone: "" });
+                    setForm({ abhaId: "", aadhaarLast4: "", fullName: "", age: "", gender: "male", phone: "", email: "" });
                     setGranted({ data_capture: true, document_scan: true, his_push: true, abha_share: true });
                     setAudioExplained({});
                     setMode("allopathic");
@@ -1833,19 +1845,25 @@ function Field({
   value,
   onChange,
   placeholder,
+  type = "text",
+  autoComplete,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
+  type?: string;
+  autoComplete?: string;
 }) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-sm text-[#4a4338]">{label}</span>
       <input
+        type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
+        autoComplete={autoComplete}
         className="h-14 w-full rounded-2xl border border-[#1b1712]/12 bg-white px-4 text-lg text-black"
       />
     </label>

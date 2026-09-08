@@ -34,8 +34,11 @@ export async function POST(request: Request) {
     age: number;
     gender: string;
     phone?: string;
+    email?: string;
     preferredLanguage?: string;
   };
+
+  const cleanEmail = (body.email ?? "").trim().toLowerCase().slice(0, 200) || undefined;
 
   if (!body.fullName || !body.age || !body.gender) {
     return Response.json({ error: "Name, age and gender are required" }, { status: 400 });
@@ -53,6 +56,7 @@ export async function POST(request: Request) {
           age: Number(body.age),
           gender: body.gender,
           phone: body.phone ?? existing.phone,
+          email: cleanEmail ?? existing.email,
           preferredLanguage: body.preferredLanguage ?? existing.preferredLanguage,
           aadhaarLast4: body.aadhaarLast4 ?? existing.aadhaarLast4,
         })
@@ -76,9 +80,6 @@ export async function POST(request: Request) {
   }
 
   // ── PHONE DE-DUPE (fixes "history gone") ────────────────────────────────
-  // Before creating a new patient, look for an existing one with the SAME
-  // phone number (compared on the last 10 digits, so +91 / 91 / 10-digit all
-  // match). Reuse that record so all visits stay on ONE patient history.
   if (body.phone) {
     const digits = body.phone.replace(/\D/g, "").slice(-10);
     if (digits.length === 10) {
@@ -94,6 +95,7 @@ export async function POST(request: Request) {
             age: Number(body.age) || existing.age,
             gender: body.gender ?? existing.gender,
             preferredLanguage: body.preferredLanguage ?? existing.preferredLanguage,
+            email: cleanEmail ?? existing.email,
             aadhaarLast4: body.aadhaarLast4 ?? existing.aadhaarLast4,
           })
           .where(eq(patients.id, existing.id))
@@ -113,6 +115,7 @@ export async function POST(request: Request) {
       age: Number(body.age),
       gender: body.gender,
       phone: body.phone ?? null,
+      email: cleanEmail,
       preferredLanguage: body.preferredLanguage ?? "en",
     })
     .returning();
