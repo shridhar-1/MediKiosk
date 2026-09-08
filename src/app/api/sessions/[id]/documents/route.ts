@@ -24,7 +24,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     docType?: string;
     fileName?: string;
     mimeType?: string;
-        sourceText?: string;
+    sourceText?: string;
     documentDate?: string;
     facilityName?: string;
     imageBase64?: string; // camera photo (downscaled) — for the handwriting vision lane
@@ -47,7 +47,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     facilityName = sample.facilityName;
   }
 
-      // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
+  // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
   // vision AI reads the image itself and returns structure + a transcript.
   const ocrConfidence = typeof body.ocrConfidence === "number" ? body.ocrConfidence : null;
   const weakText = sourceText.trim().length < 40 || (ocrConfidence !== null && ocrConfidence < 45);
