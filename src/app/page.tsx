@@ -3,6 +3,8 @@ import Image from "next/image";
 import { BrandMark } from "@/components/brand";
 import { AiHero } from "@/components/home/ai-hero";
 import { AiSummaryCard } from "@/components/home/ai-summary-card";
+import { AyushSummaryCard } from "@/components/home/ayush-summary-card";
+import { Capabilities } from "@/components/home/capabilities";
 import { DemoLoginButton } from "@/components/auth/demo-login-button";
 import { HeartPulse, Stethoscope } from "lucide-react";
 import { seedIfEmpty } from "@/lib/seed";
@@ -47,8 +49,20 @@ export default async function Home() {
           flags the dangers, and the doctor gets it before the patient sits down.
         </p>
 
+        {/* ── dual-stream positioning chips ─────────────────────────────── */}
+        <div className="mt-5 flex flex-wrap gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fffdf7]/10 px-3 py-1.5 text-xs font-semibold text-[#f6f0e4] ring-1 ring-[#f6f0e4]/20">
+            🩺 Allopathy · AI triage
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fffdf7]/10 px-3 py-1.5 text-xs font-semibold text-[#f6f0e4] ring-1 ring-[#f6f0e4]/20">
+            🌿 AYUSH · Dashavidha &amp; Prakriti
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fffdf7]/10 px-3 py-1.5 text-xs font-semibold text-[#f6f0e4] ring-1 ring-[#f6f0e4]/20">
+            🌐 8+ Indian languages
+          </span>
+        </div>
+
         <div className="mt-10">
-                  <div className="mt-10">
           <AiHero />
         </div>
 
@@ -59,9 +73,17 @@ export default async function Home() {
         <div className="mt-5">
           <AiSummaryCard />
         </div>
-                <div className="mt-5">
-          <AiSummaryCard />
+
+        {/* ── SECOND PERSONA — the same kiosk in AYUSH mode ──────────────── */}
+        <p className="mt-16 text-center text-[11px] uppercase tracking-[0.24em] text-[#f6f0e4]/50">
+          Same kiosk · a routine AYUSH intake — proof it is not one hard-coded demo
+        </p>
+        <div className="mt-5">
+          <AyushSummaryCard />
         </div>
+
+        {/* ── CAPABILITIES — why the engineering matters ─────────────────── */}
+        <Capabilities />
 
         {/* ── ONE-TAP INSTANT DEMO — judges never hunt for a login ───────── */}
         <div className="mt-12 rounded-[26px] bg-[#f6f0e4]/10 p-5 text-center ring-1 ring-[#f6f0e4]/20">
@@ -85,13 +107,7 @@ export default async function Home() {
           </p>
         </div>
 
-        {/* ── portals (secondary now — the hero sells first) ─────────────── */}
-
-        {/* ── portals (secondary now — the hero sells first) ─────────────── */}
-          <AiHero />
-        </div>
-
-        {/* ── portals (secondary now — the hero sells first) ─────────────── */}
+        {/* ── PORTALS (secondary now — the hero sells first) ─────────────── */}
         <p className="mt-14 text-[11px] uppercase tracking-[0.24em] text-[#f6f0e4]/50">
           Select your portal
         </p>

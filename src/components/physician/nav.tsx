@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { BrandMark } from "@/components/brand";
 import { LogoutButton } from "@/components/auth/logout-button";
+import { EngineStatus } from "@/components/physician/engine-status";
 import type { Staff } from "@/db/schema";
 
 const ROLE_LABEL: Record<string, string> = {
@@ -19,7 +20,7 @@ export function PhysicianNav({ member }: { member: Staff }) {
         <Link href="/physician" className="text-[#4a4338] hover:text-[#08363a]">
           Queue
         </Link>
-                <Link href="/physician/records" className="text-[#4a4338] hover:text-[#08363a]">
+        <Link href="/physician/records" className="text-[#4a4338] hover:text-[#08363a]">
           Records
         </Link>
         <Link href="/physician/logic" className="text-[#4a4338] hover:text-[#08363a]">
@@ -30,6 +31,9 @@ export function PhysicianNav({ member }: { member: Staff }) {
           <span className="block text-[11px] text-[#4a4338]">
             {member.designation ?? ROLE_LABEL[member.role] ?? member.role} · {member.hospital}
           </span>
+        </span>
+        <span className="hidden md:block">
+          <EngineStatus />
         </span>
         <LogoutButton kind="staff" />
       </nav>
