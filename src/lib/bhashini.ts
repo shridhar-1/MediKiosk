@@ -54,7 +54,8 @@ async function getPipeline(
     }),
   });
   if (!res.ok) {
-    throw new Error(`Bhashini config call failed (${res.status})`);
+    const body = await res.text().catch(() => "");
+    throw new Error(`Bhashini config call failed (${res.status}): ${body.slice(0, 200)}`);
   }
   const data: any = await res.json();
   const endpoint = data?.pipelineInferenceAPIEndPoint;
@@ -95,8 +96,9 @@ async function runPipeline(
       inputData,
     }),
   });
-  if (!res.ok) {
-    throw new Error(`Bhashini inference failed (${res.status})`);
+    if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Bhashini inference failed (${res.status}): ${body.slice(0, 200)}`);
   }
   const data: any = await res.json();
   return data?.pipelineResponse ?? [];
@@ -153,5 +155,42 @@ export async function bhashiniAsr(
   } catch (error) {
     console.error("bhashiniAsr failed:", error);
     return null;
+  }
+}
+/**
+ * Translate WITH diagnostics — same pipeline as bhashiniTranslate, but
+ * instead of swallowing the error it reports WHICH step failed and WHY
+ * (auth / pipeline config / inference / response shape). Used by the
+ * translate route so integration problems are visible, not silent nulls.
+ */
+export async function bhashiniTranslateDetailed(
+  text: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<{ translated: string | null; step?: string; error?: string }> {
+  if (!isBhashiniConfigured()) {
+    return { translated: null, step: "config", error: "BHASHINI_USER_ID / BHASHINI_ULCA_API_KEY not set" };
+  }
+  if (!text.trim()) return { translated: null, step: "input", error: "empty text" };
+  const tasks: TaskConfig[] = [
+    { taskType: "translation", config: { language: { sourceLanguage, targetLanguage } } },
+  ];
+  try {
+    const out = await runPipeline(tasks, { input: [{ source: text }] });
+    const translated = out?.[0]?.output?.[0]?.target ?? null;
+    if (!translated) {
+      return {
+        translated: null,
+        step: "parse",
+        error: `no target text in response: ${JSON.stringify(out).slice(0, 250)}`,
+      };
+    }
+    return { translated };
+  } catch (e) {
+    return {
+      translated: null,
+      step: e instanceof Error && e.message.includes("config call") ? "auth/config" : "inference",
+      error: e instanceof Error ? e.message.slice(0, 300) : "unknown error",
+    };
   }
 }
