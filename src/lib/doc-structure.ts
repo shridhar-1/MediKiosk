@@ -295,7 +295,9 @@ async function viaGeminiVision(
   if (!key) return { ok: null, debug: "GEMINI_API_KEY not set" };
   const notes: string[] = [];
   const discovered = await pickGeminiModel();
-  const tryOrder = [...new Set([discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
+  // flash-latest first — it is the endpoint that has actually responded
+  // (503 = exists, overloaded). Then the discovered name, then the rest.
+  const tryOrder = [...new Set(["gemini-flash-latest", discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
   if (discovered) notes.push(`discovered: ${discovered}`);
   for (const model of tryOrder) {
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -356,7 +358,7 @@ async function viaGeminiVision(
         },
         debug: `${model}: ok`,
       };
-    } catch (e) {
+        } catch (e) {
       const msg = e instanceof Error ? e.message.slice(0, 80) : "error";
       if (attempt === 1 && /timeout|abort/i.test(msg)) {
         notes.push(`${model}: ${msg} (retrying)`);
@@ -365,7 +367,8 @@ async function viaGeminiVision(
       notes.push(`${model}: ${msg}`);
     }
     }
-    break;
+    // (no break here — a 404/parse-fail on one model must fall through
+    // to the next candidate; this missing fall-through was the bug)
   }
   return { ok: null, debug: notes.join(" | ") || "no models tried" };
 }
