@@ -47,6 +47,25 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     facilityName = sample.facilityName;
   }
 
+    // ── Duplicate detection: the same paper must not enter the timeline twice.
+  // Patients re-upload the same old prescription at every visit; evaluators
+  // re-click the same sample. If this patient already has this exact document
+  // (same file + date, or identical text), return the existing row — no AI
+  // cost, no duplicate timeline entry, no duplicate lab flags.
+  const patientDocs = await db
+    .select()
+    .from(documents)
+    .where(eq(documents.patientId, session.patientId));
+  const existing = patientDocs.find(
+    (d) =>
+      (d.fileName === fileName && d.documentDate === documentDate) ||
+      (sourceText.trim().length >= 40 && (d.sourceText ?? "").trim() === sourceText.trim()),
+  );
+  if (existing) {
+    return Response.json({ document: existing, duplicate: true });
+  }
+
+  // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
   // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
   // vision AI reads the image itself and returns structure + a transcript.
   const ocrConfidence = typeof body.ocrConfidence === "number" ? body.ocrConfidence : null;

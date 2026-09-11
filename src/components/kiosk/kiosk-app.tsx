@@ -155,6 +155,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [docs, setDocs] = useState<DocRow[]>([]);
+  const [dupNotice, setDupNotice] = useState("");
   const [paste, setPaste] = useState("");
   const [docType, setDocType] = useState("lab");
   const [uploading, setUploading] = useState(false);
@@ -483,8 +484,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sampleId }),
     });
-    const data = (await res.json()) as { document: DocRow };
-    setDocs((d) => [...d, data.document]);
+        const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+    if (data.duplicate) {
+      setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
+    } else {
+      setDocs((d) => [...d, data.document]);
+    }
     setBusy(false);
   }
 
@@ -500,12 +505,15 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         sourceText: paste,
       }),
     });
-    const data = (await res.json()) as { document: DocRow };
-    setDocs((d) => [...d, data.document]);
+        const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+    if (data.duplicate) {
+      setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
+    } else {
+      setDocs((d) => [...d, data.document]);
+    }
     setPaste("");
     setBusy(false);
   }
-
   async function performOCRAndUpload(file: File) {
     if (!sessionId) return;
     if (!isValidDocumentFile(file)) {
@@ -556,8 +564,12 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           ocrConfidence,
         }),
       });
-      const data = (await res.json()) as { document: DocRow };
-      setDocs((d) => [...d, data.document]);
+            const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+      if (data.duplicate) {
+        setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
+      } else {
+        setDocs((d) => [...d, data.document]);
+      }
       setOcrProgress(100);
     } catch (e: any) {
       setError(e.message || "Failed to process document");
@@ -1501,8 +1513,13 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
           {step === "documents" && (
             <div className="rise mx-auto max-w-4xl">
-              <h1 className="serif text-4xl">{t("documentsTitle", lang)}</h1>
+                            <h1 className="serif text-4xl">{t("documentsTitle", lang)}</h1>
               <p className="mt-3 text-[#4a4338]">{t("documentsHelp", lang)}</p>
+              {dupNotice && (
+                <p className="mt-3 rounded-2xl bg-[#0f5c61]/10 px-4 py-3 text-sm text-[#0f5c61]">
+                  ✓ {dupNotice}
+                </p>
+              )}
               
               <div className="mt-6 grid gap-4">
                 <div

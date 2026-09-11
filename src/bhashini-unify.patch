@@ -1,0 +1,605 @@
+diff --git a/.env.example b/.env.example
+new file mode 100644
+index 0000000..3227745
+--- /dev/null
++++ b/.env.example
+@@ -0,0 +1,61 @@
++# ── MediKiosk env template ──────────────────────────────────────────────
++# Copy to .env.local for local dev. On Vercel: Settings → Environment
++# Variables → add the same keys → REDEPLOY (new values need a fresh deploy).
++# Only DATABASE_URL + Firebase are required to boot; everything else
++# degrades gracefully (template AI, mock alerts, Web-Speech voice).
++
++# ── Required ──
++DATABASE_URL=postgresql://user:password@localhost:5432/medikiosk
++NEXT_PUBLIC_FIREBASE_API_KEY=
++NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
++NEXT_PUBLIC_FIREBASE_PROJECT_ID=
++NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
++NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
++NEXT_PUBLIC_FIREBASE_APP_ID=
++
++# ── AI summary engines (pick any; template fallback if all unset) ──
++GROQ_API_KEY=
++GROQ_MODEL=openai/gpt-oss-120b
++GEMINI_API_KEY=
++OLLAMA_BASE_URL=http://localhost:11434
++OLLAMA_MODEL=
++# AI_ENGINE=auto            # force one lane: ollama | groq | gemini
++# AI_ENGINE_SUMMARY=groq,gemini
++# AI_ENGINE_ASK=gemini,groq
++
++# ── Bhashini (Govt of India language AI) ────────────────────────────────
++# Get keys: https://bhashini.ai → sign in → API Keys → your "medikiosk" key.
++#   BHASHINI_USER_ID      = UDYAT KEY   (value starting with "28c…")
++#   BHASHINI_ULCA_API_KEY = INFERENCE   (value starting with "twinZm…")
++# Do NOT use an old ULCA username here — with new dashboard keys the
++# UDYAT KEY *is* the userID. The code tries direct Dhruva inference first
++# (new keys) and falls back to ULCA pipeline discovery (legacy keys).
++BHASHINI_USER_ID=
++BHASHINI_ULCA_API_KEY=
++# BHASHINI_PIPELINE_ID=64392f96daac500b55c543cd   # default is fine, omit
++
++# ── Emergency alerts (mock-logged if unset) ──
++SMTP_HOST=
++SMTP_PORT=587
++SMTP_USER=
++SMTP_PASS=
++HOSPITAL_ALERT_EMAIL=
++HOSPITAL_ALERT_PHONE=
++HOSPITAL_ALERT_WHATSAPP=
++TWILIO_ACCOUNT_SID=
++TWILIO_AUTH_TOKEN=
++TWILIO_SMS_FROM=
++TWILIO_WHATSAPP_FROM=
++
++# ── Future integrations (slots ready, onboarding in progress) ──
++ABDM_CLIENT_ID=
++ABDM_CLIENT_SECRET=
++ABDM_GATEWAY_URL=
++ABDM_X_HIP_ID=
++ABDM_HIP_NAME=
++HIS_FHIR_URL=
++HIS_FHIR_BASIC_AUTH=
++HIS_API_KEY=
++UIDAI_LICENSE_KEY=
++UIDAI_VAULT_URL=
++UIDAI_EKYC_URL=
+diff --git a/README.md b/README.md
+index fd41aa7..6182183 100644
+--- a/README.md
++++ b/README.md
+@@ -143,7 +143,7 @@ Create a `.env.local` file. Only the first two groups are needed to run — ever
+ | Variable | What it does |
+ |---|---|
+ | `ABDM_CLIENT_ID`, `ABDM_CLIENT_SECRET`, `ABDM_GATEWAY_URL`, `ABDM_X_HIP_ID`, `ABDM_HIP_NAME` | ABDM / ABHA push |
+-| `NEXT_PUBLIC_BHASHINI_API_KEY`, `NEXT_PUBLIC_BHASHINI_ASR_URL`, `BHASHINI_USER_ID` | Bhashini speech input |
++| `BHASHINI_USER_ID` (= UDYAT KEY), `BHASHINI_ULCA_API_KEY` (= INFERENCE key) | Bhashini ASR + translation + OCR — keys: bhashini.ai → API Keys (redeploy after setting; see `.env.example`) |
+ | `HIS_FHIR_URL`, `HIS_FHIR_BASIC_AUTH`, `HIS_API_KEY` | Hospital Information System |
+ | `UIDAI_LICENSE_KEY`, `UIDAI_VAULT_URL`, `UIDAI_EKYC_URL` | Aadhaar e-KYC |
+ 
+@@ -196,7 +196,7 @@ npm run build        # verify the build passes
+ 
+ ## 🗺️ Roadmap
+ 
+-- 🎙️ **Bhashini** speech input — voice intake in 12+ Indian languages
++- 🎙️ **Bhashini** speech input — wired (Bhashini → Groq Whisper → Web Speech cascade); add keys to go LIVE
+ - 🏛️ Full **ABDM onboarding** — push confirmed records to the patient's ABHA health locker
+ - 🔢 Live **token display board** so patients know their turn
+ - 🪪 Aadhaar e-KYC based identity (UIDAI slots prepared)
+diff --git a/src/app/api/bhashini/asr/route.ts b/src/app/api/bhashini/asr/route.ts
+index 27a1eaa..4a59aaf 100644
+--- a/src/app/api/bhashini/asr/route.ts
++++ b/src/app/api/bhashini/asr/route.ts
+@@ -95,12 +95,7 @@ export async function POST(req: NextRequest) {
+           groqForm.append("language", language);
+         }
+         groqForm.append("temperature", "0");
+-                if (language === "en") {
+-          groqForm.append(
+-            "prompt",
+-            "Patient describing symptoms at a hospital kiosk: fever, cough, cold, headache, body pain, vomiting, loose motion, chest pain, breathing difficulty.",
+-          );
+-        }
++        // Single medical-vocabulary hint (was appended twice for "en").
+         groqForm.append(
+           "prompt",
+           "Patient describing symptoms at a hospital kiosk: fever, cough, cold, headache, body pain, vomiting, loose motion, chest pain, breathing difficulty, since how many days.",
+diff --git a/src/app/api/bhashini/ocr/route.ts b/src/app/api/bhashini/ocr/route.ts
+index ece8abc..a26c9f3 100644
+--- a/src/app/api/bhashini/ocr/route.ts
++++ b/src/app/api/bhashini/ocr/route.ts
+@@ -1,76 +1,86 @@
++import { bhashiniOcr, isBhashiniConfigured } from "@/lib/bhashini";
+ import { NextRequest } from "next/server";
+ 
+ /**
+- * OCR Route - Works WITHOUT BHASHINI_API_KEY
+- * Default uses Tesseract.js (free, no key) - your translator is enough
+- * Optional Bhashini OCR if key set (better handwriting)
++ * OCR Route — Bhashini ULCA when keys are set, Tesseract hint otherwise.
++ * Keys (canonical names, shared with ASR/translate):
++ *   BHASHINI_USER_ID      = UDYAT KEY from bhashini.ai → API Keys
++ *   BHASHINI_ULCA_API_KEY = INFERENCE key from the same page
++ * (Legacy BHASHINI_API_KEY is still accepted as a fallback.)
+  */
+ 
+ export const dynamic = "force-dynamic";
++export const maxDuration = 60;
+ 
+ export async function POST(req: NextRequest) {
+-  const form = await req.formData();
+-  const image = form.get("image") as Blob;
+-  const language = (form.get("language") as string) || "en+hi";
++  const contentType = req.headers.get("content-type") ?? "";
++  let imageBase64 = "";
++  let language = "en";
+ 
+-  if (!image) return Response.json({ error: "No image" }, { status: 400 });
++  try {
++    if (contentType.includes("application/json")) {
++      const body = (await req.json()) as {
++        imageBase64?: string;
++        language?: string;
++      };
++      imageBase64 = body.imageBase64 ?? "";
++      language = (body.language ?? "en").slice(0, 5);
++    } else {
++      const form = await req.formData();
++      const image = form.get("image") as Blob | null;
++      language = ((form.get("language") as string) || "en").slice(0, 5);
++      if (!image) return Response.json({ error: "No image" }, { status: 400 });
++      imageBase64 = Buffer.from(await image.arrayBuffer()).toString("base64");
++    }
++
++    if (!imageBase64) {
++      return Response.json({ error: "No image" }, { status: 400 });
++    }
+ 
+-  const apiKey = process.env.BHASHINI_API_KEY;
+-  const userId = process.env.BHASHINI_USER_ID;
++    // LIVE Bhashini OCR — same ULCA pipeline flow as ASR/translate
++    // (serviceId discovery + inference key), not the old direct call.
++    if (isBhashiniConfigured()) {
++      const text = await bhashiniOcr(imageBase64, language);
++      if (text) {
++        return Response.json({
++          text,
++          confidence: 0.9,
++          mode: "LIVE_BHASHINI",
++          language,
++        });
++      }
++      // Configured but failed → tell the client to fall back, with the hint.
++      return Response.json({
++        text: "",
++        confidence: 0,
++        mode: "LIVE_FAILED",
++        fallback: "tesseract",
++        error: "Bhashini OCR failed — falling back to Tesseract.js",
++      });
++    }
+ 
+-  // If no Bhashini key, tell frontend to use Tesseract.js (no API needed)
+-  if (!apiKey || !userId) {
++    // No keys → client falls back to Tesseract.js (free, offline).
+     return Response.json({
+       text: "",
+       confidence: 0,
+       mode: "MOCK_TESSERACT",
+-      error: "BHASHINI_API_KEY not set - using Tesseract.js (free, no key needed, works offline). Your translator is enough.",
++      error:
++        "Bhashini keys not set — using Tesseract.js (free, no key needed, works offline).",
+       fallback: "tesseract",
+-      checklist: [
+-        "✅ Tesseract.js eng+hin active - No key needed",
+-        "✅ Guardrails fix FBS 1 mg/dL bug",
+-        "✅ Drug interaction checker works",
+-        "Optional: Set BHASHINI_API_KEY for better handwriting"
+-      ]
+-    });
+-  }
+-
+-  // LIVE Bhashini OCR - only if key exists (you don't need it)
+-  try {
+-    const buffer = Buffer.from(await image.arrayBuffer());
+-    const base64 = buffer.toString("base64");
+-
+-    const res = await fetch("https://dhruva-api.bhashini.gov.in/services/inference/pipeline", {
+-      method: "POST",
+-      headers: { "Content-Type": "application/json", Authorization: apiKey },
+-      body: JSON.stringify({
+-        pipelineTasks: [
+-          {
+-            taskType: "ocr",
+-            config: { language: { sourceLanguage: language.split("+")[0] }, serviceId: "" },
+-          },
+-        ],
+-        inputData: { image: [{ imageContent: base64 }] },
+-      }),
+     });
+-
+-    const data = await res.json();
+-    const text = data?.pipelineResponse?.[0]?.output?.[0]?.source || "";
+-
+-    return Response.json({ text, confidence: 0.9, mode: "LIVE_BHASHINI" });
+   } catch (e: any) {
+-    return Response.json({ error: e.message, mode: "LIVE_FAILED", fallback: "tesseract" }, { status: 500 });
++    console.error("POST /api/bhashini/ocr error:", e);
++    return Response.json(
++      { error: e?.message || "OCR failed", mode: "LIVE_FAILED", fallback: "tesseract" },
++      { status: 500 },
++    );
+   }
+ }
+ 
+ export async function GET() {
+-  const configured = !!(process.env.BHASHINI_API_KEY && process.env.BHASHINI_USER_ID);
++  const configured = isBhashiniConfigured();
+   return Response.json({
+     configured,
+-    mode: configured ? "LIVE Bhashini OCR" : "MOCK Tesseract.js (no key needed, works fine, your translator is enough)",
+-    endpoint: "OCR - Works without Bhashini key",
+-    checklist: configured 
+-      ? ["✅ BHASHINI_API_KEY set - Live OCR"] 
+-      : ["✅ Tesseract.js active - No key needed, free, offline", "✅ Your translator is enough for demo", "Optional: Set BHASHINI_API_KEY for better handwriting"],
++    mode: configured ? "LIVE Bhashini OCR" : "MOCK Tesseract.js (no keys needed)",
+   });
+-}
+\ No newline at end of file
++}
+diff --git a/src/lib/bhashini.ts b/src/lib/bhashini.ts
+index 0c0a3a2..4bc2837 100644
+--- a/src/lib/bhashini.ts
++++ b/src/lib/bhashini.ts
+@@ -2,25 +2,49 @@
+ // TypeScript port of the open-source github.com/dteklavya/bhashini_translator
+ // flow — no Python needed, pure REST calls from Next.js.
+ //
+-// Env vars (Vercel → Settings → Environment Variables):
+-//   BHASHINI_USER_ID        — your ULCA userId
+-//   BHASHINI_ULCA_API_KEY   — the API key generated in your ULCA profile
++// Env vars (locally: .env.local · on Vercel: Settings → Environment
++// Variables, then REDEPLOY or the new values won't take effect):
++//   BHASHINI_USER_ID        — UDYAT KEY from https://bhashini.ai → API Keys
++//                             (the value starting with "28c…" — this IS the
++//                             ULCA userID for the new dashboard keys)
++//   BHASHINI_ULCA_API_KEY   — INFERENCE key from the same page
++//                             (the value starting with "twinZm…" — this
++//                             authorizes the pipeline + inference calls)
++//   BHASHINI_API_KEY        — legacy alias, accepted as a fallback for the
++//                             INFERENCE key (older code used this name)
+ //   BHASHINI_PIPELINE_ID    — optional (default: 64392f96daac500b55c543cd)
+ //
+-// Get free keys: https://bhashini.gov.in → sign up → My Profile → Generate API Key
++// NOTE: the old ULCA username-style userID is legacy — with the new
++// bhashini.ai dashboard keys, UDYAT KEY *is* the userID. Don't mix an old
++// username with a new INFERENCE key; the config call will 401.
++//
++// Two key generations are supported (runPipeline tries both):
++//   Flow A: new INFERENCE key → direct Dhruva compute (1 call, no serviceIds)
++//   Flow B: legacy ULCA pair → getModelsPipeline discovery + compute (cached)
+ 
+ const ULCA_ENDPOINT =
+   "https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline";
+ 
+-const USER_ID = process.env.BHASHINI_USER_ID ?? "";
+-const ULCA_KEY = process.env.BHASHINI_ULCA_API_KEY ?? "";
+-const PIPELINE_ID = process.env.BHASHINI_PIPELINE_ID ?? "64392f96daac500b55c543cd";
++const PIPELINE_ID =
++  process.env.BHASHINI_PIPELINE_ID ?? "64392f96daac500b55c543cd";
++
++/** UDYAT KEY (new bhashini.ai dashboard) — the ULCA userID. */
++export function bhashiniUserId(): string {
++  return process.env.BHASHINI_USER_ID ?? "";
++}
++
++/** INFERENCE key (new dashboard); falls back to legacy BHASHINI_API_KEY. */
++export function bhashiniUlcaKey(): string {
++  return (
++    process.env.BHASHINI_ULCA_API_KEY || process.env.BHASHINI_API_KEY || ""
++  );
++}
+ 
+ export function isBhashiniConfigured(): boolean {
+-  return Boolean(USER_ID && ULCA_KEY);
++  return Boolean(bhashiniUserId() && bhashiniUlcaKey());
+ }
+ 
+-type TaskType = "translation" | "asr" | "tts";
++type TaskType = "translation" | "asr" | "tts" | "ocr";
+ 
+ type TaskConfig = {
+   taskType: TaskType;
+@@ -37,16 +61,38 @@ type PipelineInfo = {
+   serviceIds: Partial<Record<TaskType, string>>;
+ };
+ 
++// Pipeline discovery is identical for identical (task, language) pairs, so
++// cache it — otherwise EVERY voice note costs 2 sequential HTTP calls
++// (config + inference). Entries live 6h (inference keys are long-lived).
++const PIPELINE_CACHE = new Map<
++  string,
++  { info: PipelineInfo; expires: number }
++>();
++const PIPELINE_TTL_MS = 6 * 60 * 60 * 1000;
++
++function cacheKey(tasks: TaskConfig[]): string {
++  return (
++    tasks
++      .map(
++        (t) =>
++          `${t.taskType}:${t.config.language.sourceLanguage}->${t.config.language.targetLanguage ?? ""}`,
++      )
++      .join("|") + `::${PIPELINE_ID}`
++  );
++}
++
+ /** Step 1 — ask ULCA for the serviceIds + inference endpoint for our tasks. */
+-async function getPipeline(
+-  tasks: TaskConfig[],
+-): Promise<PipelineInfo> {
++async function getPipeline(tasks: TaskConfig[]): Promise<PipelineInfo> {
++  const key = cacheKey(tasks);
++  const hit = PIPELINE_CACHE.get(key);
++  if (hit && hit.expires > Date.now()) return hit.info;
++
+   const res = await fetch(ULCA_ENDPOINT, {
+     method: "POST",
+     headers: {
+       "Content-Type": "application/json",
+-      ulcaApiKey: ULCA_KEY,
+-      userID: USER_ID,
++      ulcaApiKey: bhashiniUlcaKey(),
++      userID: bhashiniUserId(),
+     },
+     body: JSON.stringify({
+       pipelineTasks: tasks,
+@@ -55,7 +101,9 @@ async function getPipeline(
+   });
+   if (!res.ok) {
+     const body = await res.text().catch(() => "");
+-    throw new Error(`Bhashini config call failed (${res.status}): ${body.slice(0, 200)}`);
++    throw new Error(
++      `Bhashini config call failed (${res.status}): ${body.slice(0, 200)}`,
++    );
+   }
+   const data: any = await res.json();
+   const endpoint = data?.pipelineInferenceAPIEndPoint;
+@@ -67,18 +115,83 @@ async function getPipeline(
+     const sid = block?.config?.[0]?.serviceId;
+     if (sid && block?.taskType) serviceIds[block.taskType as TaskType] = sid;
+   }
+-  return {
++  const info: PipelineInfo = {
+     callbackUrl: endpoint.callbackUrl,
+     inferenceKey: endpoint.inferenceApiKey.value,
+     serviceIds,
+   };
++  PIPELINE_CACHE.set(key, { info, expires: Date.now() + PIPELINE_TTL_MS });
++  return info;
+ }
+ 
+-/** Step 2 — run the pipeline with inputData and read the answer. */
++const DHRUVA_COMPUTE_URL =
++  "https://dhruva-api.bhashini.gov.in/services/inference/pipeline";
++
++/**
++ * Flow A (new bhashini.ai dashboard keys) — direct Dhruva compute.
++ * The INFERENCE key is the bearer token; Dhruva auto-routes models, so no
++ * serviceIds are sent. Single call: faster + no discovery step to fail.
++ */
++async function runDirect(
++  tasks: TaskConfig[],
++  inputData: {
++    input?: { source: string }[];
++    audio?: { audioContent: string }[];
++    image?: { imageContent: string }[];
++  },
++): Promise<any[]> {
++  const bare = tasks.map((t) => ({
++    taskType: t.taskType,
++    config: { language: t.config.language },
++  }));
++  const res = await fetch(DHRUVA_COMPUTE_URL, {
++    method: "POST",
++    headers: {
++      "Content-Type": "application/json",
++      Authorization: bhashiniUlcaKey(),
++    },
++    body: JSON.stringify({
++      pipelineTasks: bare,
++      pipelineRequestConfig: { pipelineId: PIPELINE_ID },
++      inputData,
++    }),
++  });
++  if (!res.ok) {
++    const body = await res.text().catch(() => "");
++    throw new Error(
++      `Bhashini direct inference failed (${res.status}): ${body.slice(0, 200)}`,
++    );
++  }
++  const data: any = await res.json();
++  return data?.pipelineResponse ?? [];
++}
++
++function isAuthFailure(e: unknown): boolean {
++  const msg = e instanceof Error ? e.message : "";
++  return msg.includes("(401)") || msg.includes("(403)");
++}
++
++/**
++ * Step 2 — run the pipeline, supporting BOTH key generations:
++ *   Flow A first: direct Dhruva compute (new bhashini.ai INFERENCE keys).
++ *   Flow B fallback: ULCA config + compute (legacy ULCA keys, cached).
++ */
+ async function runPipeline(
+   tasks: TaskConfig[],
+-  inputData: { input?: { source: string }[]; audio?: { audioContent: string }[] },
++  inputData: {
++    input?: { source: string }[];
++    audio?: { audioContent: string }[];
++    image?: { imageContent: string }[];
++  },
+ ): Promise<any[]> {
++  try {
++    return await runDirect(tasks, inputData);
++  } catch (e) {
++    // Only fail over on auth errors — anything else (bad audio, 5xx,
++    // model error) would fail on Flow B too, so surface it immediately.
++    if (!isAuthFailure(e)) throw e;
++    console.warn("Bhashini direct flow rejected keys, trying ULCA flow:", e);
++  }
+   const info = await getPipeline(tasks);
+   const withServiceIds = tasks.map((t) => ({
+     ...t,
+@@ -96,9 +209,11 @@ async function runPipeline(
+       inputData,
+     }),
+   });
+-    if (!res.ok) {
++  if (!res.ok) {
+     const body = await res.text().catch(() => "");
+-    throw new Error(`Bhashini inference failed (${res.status}): ${body.slice(0, 200)}`);
++    throw new Error(
++      `Bhashini inference failed (${res.status}): ${body.slice(0, 200)}`,
++    );
+   }
+   const data: any = await res.json();
+   return data?.pipelineResponse ?? [];
+@@ -147,7 +262,9 @@ export async function bhashiniAsr(
+         config: { language: { sourceLanguage, targetLanguage } },
+       });
+     }
+-    const out = await runPipeline(tasks, { audio: [{ audioContent: audioBase64 }] });
++    const out = await runPipeline(tasks, {
++      audio: [{ audioContent: audioBase64 }],
++    });
+     if (targetLanguage) {
+       return out?.[1]?.output?.[0]?.target ?? null;
+     }
+@@ -157,6 +274,30 @@ export async function bhashiniAsr(
+     return null;
+   }
+ }
++
++/**
++ * Image → text via the ULCA OCR pipeline. Returns null on any failure.
++ * (Replaces the old direct-Dhruva call that shipped an empty serviceId,
++ * which could never route to a model.)
++ */
++export async function bhashiniOcr(
++  imageBase64: string,
++  sourceLanguage = "en",
++): Promise<string | null> {
++  try {
++    if (!isBhashiniConfigured() || !imageBase64) return null;
++    const tasks: TaskConfig[] = [
++      { taskType: "ocr", config: { language: { sourceLanguage } } },
++    ];
++    const out = await runPipeline(tasks, {
++      image: [{ imageContent: imageBase64 }],
++    });
++    return out?.[0]?.output?.[0]?.source ?? null;
++  } catch (error) {
++    console.error("bhashiniOcr failed:", error);
++    return null;
++  }
++}
+ /**
+  * Translate WITH diagnostics — same pipeline as bhashiniTranslate, but
+  * instead of swallowing the error it reports WHICH step failed and WHY
+@@ -169,11 +310,20 @@ export async function bhashiniTranslateDetailed(
+   targetLanguage: string,
+ ): Promise<{ translated: string | null; step?: string; error?: string }> {
+   if (!isBhashiniConfigured()) {
+-    return { translated: null, step: "config", error: "BHASHINI_USER_ID / BHASHINI_ULCA_API_KEY not set" };
++    return {
++      translated: null,
++      step: "config",
++      error:
++        "BHASHINI_USER_ID (UDYAT KEY) / BHASHINI_ULCA_API_KEY (INFERENCE key) not set",
++    };
+   }
+-  if (!text.trim()) return { translated: null, step: "input", error: "empty text" };
++  if (!text.trim())
++    return { translated: null, step: "input", error: "empty text" };
+   const tasks: TaskConfig[] = [
+-    { taskType: "translation", config: { language: { sourceLanguage, targetLanguage } } },
++    {
++      taskType: "translation",
++      config: { language: { sourceLanguage, targetLanguage } },
++    },
+   ];
+   try {
+     const out = await runPipeline(tasks, { input: [{ source: text }] });
+@@ -189,8 +339,11 @@ export async function bhashiniTranslateDetailed(
+   } catch (e) {
+     return {
+       translated: null,
+-      step: e instanceof Error && e.message.includes("config call") ? "auth/config" : "inference",
++      step:
++        e instanceof Error && e.message.includes("config call")
++          ? "auth/config"
++          : "inference",
+       error: e instanceof Error ? e.message.slice(0, 300) : "unknown error",
+     };
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/lib/document-ocr.ts b/src/lib/document-ocr.ts
+index 12dd5e2..92c3972 100644
+--- a/src/lib/document-ocr.ts
++++ b/src/lib/document-ocr.ts
+@@ -122,13 +122,16 @@ export function checkDrugInteractions(drugs: string[]): { interactions: DrugInte
+ 
+ // OCR with Bhashini + Tesseract - Works WITHOUT Bhashini key (Tesseract fallback)
+ export async function performOCR(file: File, onProgress?: (p: number) => void): Promise<{ text: string; mode: "TESSERACT" | "BHASHINI" | "HANDWRITING"; confidence: number; labs: ReturnType<typeof parseLabsWithGuardrails>; drugInteractions: ReturnType<typeof checkDrugInteractions> }> {
+-  const hasBhashiniKey = !!(process.env.BHASHINI_API_KEY || process.env.NEXT_PUBLIC_BHASHINI_API_KEY);
+-  
++  // NOTE: the browser can't see server env vars, so don't gate on them here —
++  // always try the server OCR route first. The server decides (LIVE Bhashini
++  // when keys are set, MOCK hint otherwise) and we fall back to Tesseract
++  // below whenever it returns no text.
++
+   let text = "";
+   let mode: "TESSERACT" | "BHASHINI" | "HANDWRITING" = "TESSERACT";
+   let confidence = 0.7;
+ 
+-  if (hasBhashiniKey && file.type.startsWith("image/")) {
++  if (file.type.startsWith("image/")) {
+     try {
+       onProgress?.(10);
+       const form = new FormData();
+@@ -167,13 +170,25 @@ export async function performOCR(file: File, onProgress?: (p: number) => void):
+   return { text, mode, confidence, labs, drugInteractions };
+ }
+ 
+-export function getOcrStatus() {
+-  const hasBhashiniKey = !!(process.env.BHASHINI_API_KEY || process.env.NEXT_PUBLIC_BHASHINI_API_KEY);
++export async function getOcrStatus() {
++  // Probe the server — only it can see the keys (client-side env checks
++  // always read undefined). No callers yet; kept ready for the UI.
++  let live = false;
++  try {
++    const res = await fetch("/api/bhashini/ocr", { method: "GET" });
++    live = Boolean((await res.json())?.configured);
++  } catch {
++    live = false;
++  }
+   return {
+-    bhashiniConfigured: hasBhashiniKey,
+-    mode: hasBhashiniKey ? "LIVE Bhashini OCR + Tesseract fallback" : "MOCK Tesseract only (BHASHINI_API_KEY not set) - Works fine, your translator is enough",
++    bhashiniConfigured: live,
++    mode: live
++      ? "LIVE Bhashini OCR + Tesseract fallback"
++      : "Tesseract.js (server has no Bhashini keys set)",
+     checklist: [
+-      hasBhashiniKey ? "✅ BHASHINI_API_KEY set - Bhashini OCR active" : "✅ Tesseract.js eng+hin active - No Bhashini key needed, works offline",
++      live
++        ? "✅ Bhashini keys set on server - Bhashini OCR active"
++        : "✅ Tesseract.js eng+hin active - No Bhashini key needed, works offline",
+       "✅ Guardrails: Rejects instruction lines like 'Review with FBS, HbA1c' -> no FBS 1 mg/dL bug",
+       "✅ Drug interaction checker: warfarin+aspirin, metformin+alcohol, lisinopril+K+, AYUSH+Allopathy",
+       "✅ Handwriting: Tesseract + preprocessing, Bhashini better if key set",
