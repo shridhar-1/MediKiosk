@@ -29,7 +29,15 @@ export async function POST(request: Request) {
     body = {};
   }
 
-  if (body.kind === "staff") {
+    if (body.kind === "staff") {
+    // SECURITY: auto-creating a physician for any email is a demo-only
+    // shortcut. Outside DEMO_MODE, staff must use real credentials.
+    if (process.env.DEMO_MODE !== "true") {
+      return Response.json(
+        { error: "Demo doctor sign-in is disabled. Sign in with your staff email and password." },
+        { status: 403 },
+      );
+    }
     const email = normalizeEmail(body.email ?? "");
     const name = (body.fullName ?? "").trim();
 
@@ -103,8 +111,15 @@ export async function POST(request: Request) {
       .returning();
   }
 
-  if (!patient) {
-    // FIXED: asc = Priya (oldest). Now desc = most recent
+    if (!patient) {
+    // SECURITY: logging in as "the most recent patient" without any identifier
+    // is a demo-only shortcut. Outside DEMO_MODE you must identify yourself.
+    if (process.env.DEMO_MODE !== "true") {
+      return Response.json(
+        { error: "No patient matches those details — please register as a new patient." },
+        { status: 404 },
+      );
+    }
     [patient] = await db.select().from(patients).orderBy(desc(patients.createdAt)).limit(1);
   }
 

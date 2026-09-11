@@ -1,12 +1,14 @@
 import { AuthShell } from "@/components/auth/auth-shell";
 import { StaffLoginForm } from "@/components/auth/staff-login-form";
 import { DemoLoginButton } from "@/components/auth/demo-login-button";
+import { demoModeEnabled } from "@/lib/auth";
 import { seedIfEmpty } from "@/lib/seed";
 
 export const dynamic = "force-dynamic";
 
 export default async function StaffLoginPage() {
-  await seedIfEmpty();
+    await seedIfEmpty();
+  const demo = demoModeEnabled();
 
   return (
     <AuthShell
@@ -26,12 +28,14 @@ export default async function StaffLoginPage() {
       swapHref="/login/patient"
       swapLabel="Are you a patient? Sign in to the patient portal &rarr;"
         >
-      <div className="mb-4">
-        <DemoLoginButton role="staff" />
-        <p className="mt-1.5 text-center text-[11px] text-[#4a4338]/70">
-          Evaluators: enter the console instantly — no OTP needed.
-        </p>
-      </div>
+            {demo && (
+        <div className="mb-4">
+          <DemoLoginButton role="staff" />
+          <p className="mt-1.5 text-center text-[11px] text-[#4a4338]/70">
+            Evaluators: enter the console instantly — no OTP needed.
+          </p>
+        </div>
+      )}
       <StaffLoginForm />
     </AuthShell>
   );

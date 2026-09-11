@@ -98,9 +98,20 @@ export async function patientOrDemo(): Promise<Patient | null> {
   return null;
 }
 
+/**
+ * Demo shortcuts (fallback doctor, one-click demo logins, demo reset) are
+ * enabled ONLY when DEMO_MODE==="true". In production there is no backdoor
+ * into the physician console: unsigned visitors are redirected to /login/staff
+ * by every /physician page when this returns null.
+ */
+export function demoModeEnabled(): boolean {
+  return process.env.DEMO_MODE === "true";
+}
+
 export async function staffOrDemo(): Promise<Staff | null> {
   const signedIn = await currentStaff();
   if (signedIn) return signedIn;
+  if (!demoModeEnabled()) return null; // production: no fallback doctor
   const [fallback] = await db.select().from(staff).orderBy(asc(staff.createdAt)).limit(1);
   return fallback ?? null;
 }
