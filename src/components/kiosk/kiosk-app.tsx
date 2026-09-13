@@ -45,9 +45,10 @@ import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speec
 import { classifyUtterance } from "@/lib/utterance-guard";
 import type { ExtractedIntake } from "@/lib/chat-extract";
 import { arriveByTime, formatClockTime, scheduleSlot } from "@/lib/queue";
-import { roomFor } from "@/lib/facility";
+import { opdStatus, roomFor } from "@/lib/facility";
 import { parseAadhaarText, parseAbhaCardText } from "@/lib/aadhaar-scan";
-import { DEPARTMENTS, LANGUAGES, type CareMode, type InputMode, type KioskStep, type Lang } from "@/lib/types";
+import { DEPARTMENTS, LANGUAGES, type CareMode, type DepartmentId, type InputMode, type KioskStep, type Lang } from "@/lib/types";
+import { suggestDepartment } from "@/lib/specialty-router";
 import type { AyushAssessment, ExtractedDocument } from "@/db/schema";
 import {
   Activity,
@@ -202,6 +203,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [chatBusy, setChatBusy] = useState(false);
   const [chatMsgs, setChatMsgs] = useState<{ who: "you" | "ai"; text: string }[]>([]);
   const [chatDraft, setChatDraft] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean; warnings?: string[] } | null>(null);
+  const [deptDismissed, setDeptDismissed] = useState<DepartmentId | null>(null);
   const [chatDone, setChatDone] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean; warnings?: string[] } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
@@ -697,6 +699,29 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       setError(e instanceof Error ? e.message : "Could not cancel");
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Smart routing: move the visit to the suggested specialty. The token is
+  // re-prefixed server-side (MED-0042 → DER-0042) so ticket, board and HIS agree.
+  async function switchDepartment(sug: DepartmentId) {
+    if (!sessionId) {
+      setDepartment(sug); // session not open yet — nothing to re-prefix
+      return;
+    }
+    try {
+      setError("");
+      const res = await fetch(`/api/sessions/${sessionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ department: sug }),
+      });
+      const data = (await res.json()) as { session?: { tokenNumber: string | null }; error?: string };
+      if (!res.ok || !data.session) throw new Error(data.error || "Could not switch department");
+      setDepartment(sug);
+      setToken(data.session.tokenNumber ?? token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not switch department");
     }
   }
 
@@ -1802,6 +1827,39 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </ul>
                 </div>
               )}
+              {!flags?.triggered && !department.startsWith("ayush") && (() => {
+                const sug = suggestDepartment(
+                  [summary.chiefComplaint, summary.hpi, summary.reviewOfSystems, summary.pastMedical].join(" "),
+                );
+                if (!sug || sug === department || deptDismissed === sug) return null;
+                const sugDept = DEPARTMENTS.find((d) => d.id === sug);
+                const curDept = DEPARTMENTS.find((d) => d.id === department);
+                return (
+                  <div className="mt-4 rounded-3xl border border-[#0f5c61]/30 bg-[#e6f2f0] p-5">
+                    <p className="text-sm font-bold text-[#0f5c61]">🧭 Right department for your problem</p>
+                    <p className="mt-1 text-sm text-[#1b1712]">
+                      Your symptoms sound like <b>{sugDept?.label}</b> — you selected {curDept?.label}. We will send
+                      your file where it needs to go.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void switchDepartment(sug)}
+                        className="rounded-full bg-[#0f5c61] px-4 py-2 text-sm font-semibold text-white"
+                      >
+                        Switch to {sugDept?.label}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeptDismissed(sug)}
+                        className="rounded-full border border-[#1b1712]/15 bg-white px-4 py-2 text-sm font-semibold text-[#1b1712]"
+                      >
+                        Keep {curDept?.label}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="prose-clinical mt-6 space-y-4 text-[15px] leading-relaxed">
                 <Block title={sectionTitles.chiefComplaint[lang]} body={summary.chiefComplaint} />
                 <Block title={sectionTitles.hpi[lang]} body={summary.hpi} />
@@ -1855,6 +1913,18 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                   </p>
                 )}
                 {location === "home" ? <ScheduleSlotBox /> : <QueuePosition token={token} />}
+                {location === "hospital" && (() => {
+                  const st = opdStatus();
+                  return st.open ? (
+                    <p className="mt-3 text-[11px] font-semibold text-[#0f5c61]">
+                      🟢 OPD open now · closes {st.closesAt} · Emergency is open 24 hours
+                    </p>
+                  ) : (
+                    <p className="mt-3 rounded-2xl bg-[#1b1712]/85 px-3 py-2 text-[11px] font-semibold text-[#f6f0e4]">
+                      🌙 OPD is closed now — your token is queued for {st.nextOpenLabel}. Emergency (Ground Floor, Wing A) is open 24 hours.
+                    </p>
+                  );
+                })()}
                 {flags?.triggered && (
                   <p className="mt-4 rounded-full bg-[#b42318] px-3 py-1 text-xs font-semibold text-white">
                     {t("goTriage", lang)}
@@ -1892,6 +1962,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     setDraftValues([]);
                     setDocs([]);
                     setSummary(null);
+                    setDeptDismissed(null);
                     setFlags(null);
                     setCancellingEmergency(false);
                     setError("");

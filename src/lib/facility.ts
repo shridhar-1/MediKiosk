@@ -111,3 +111,38 @@ export function roomCaption(department: string, priority?: string | null): strin
   const r = roomFor(department, priority);
   return `${r.room} · ${r.floor} · ${r.wing}`;
 }
+// ── OPD hours vs the 24×7 emergency department ─────────────────────────────
+// Government OPDs run fixed hours; the emergency block never closes. The
+// token ticket tells the patient which of the two worlds they are in.
+// Hours are IST (the kiosk runs in India) and configurable for demo day via
+// NEXT_PUBLIC_OPD_OPEN / NEXT_PUBLIC_OPD_CLOSE ("HH:MM", 24-hour).
+
+export const OPD_HOURS = {
+  open: process.env.NEXT_PUBLIC_OPD_OPEN ?? "08:00",
+  close: process.env.NEXT_PUBLIC_OPD_CLOSE ?? "20:00",
+};
+
+/** Any instant, re-based so its LOCAL fields (getHours…) read IST time. */
+export function istDate(d: Date = new Date()): Date {
+  return new Date(d.getTime() + (5.5 * 60 + d.getTimezoneOffset()) * 60000);
+}
+
+/** Current time in India (IST, UTC+5:30) regardless of server/browser TZ. */
+export function istNow(): Date {
+  return istDate(new Date());
+}
+
+export function opdStatus(now: Date = new Date()): {
+  open: boolean;
+  opensAt: string;
+  closesAt: string;
+  nextOpenLabel: string;
+} {
+  const ist = istDate(now); // read hours in IST, not the runtime's timezone
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+  const [oh, om] = OPD_HOURS.open.split(":").map(Number);
+  const [ch, cm] = OPD_HOURS.close.split(":").map(Number);
+  const open = mins >= oh * 60 + (om || 0) && mins < ch * 60 + (cm || 0);
+  const nextOpenLabel = mins < oh * 60 + (om || 0) ? `today ${OPD_HOURS.open}` : `tomorrow ${OPD_HOURS.open}`;
+  return { open, opensAt: OPD_HOURS.open, closesAt: OPD_HOURS.close, nextOpenLabel };
+}

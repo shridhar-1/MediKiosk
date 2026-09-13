@@ -120,6 +120,37 @@ export async function POST(request: Request) {
   }
 }
 
+// PATCH /api/sessions/:id — change department before the visit is submitted
+// (smart routing: the kiosk suggests the right specialty; switching also
+// re-prefixes the token so the ticket, board and HIS all agree).
+export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params;
+    const body = (await request.json()) as { department?: string };
+    const { DEPARTMENTS } = await import("@/lib/types");
+    const dept = DEPARTMENTS.find((d) => d.id === body.department);
+    if (!dept) {
+      return Response.json({ error: "Unknown department" }, { status: 400 });
+    }
+    const [existing] = await db.select().from(sessions).where(eq(sessions.id, id));
+    if (!existing) return Response.json({ error: "Session not found" }, { status: 404 });
+
+    // keep the serial, swap the prefix: MED-0042 -> DER-0042
+    const serial = Number(existing.tokenNumber?.match(/(\d+)\s*$/)?.[1] ?? 0);
+    const tokenNumber = serial > 0 ? tokenFor(dept.id, serial) : existing.tokenNumber;
+
+    const [session] = await db
+      .update(sessions)
+      .set({ department: dept.id, tokenNumber })
+      .where(eq(sessions.id, id))
+      .returning();
+    return Response.json({ session });
+  } catch (error: any) {
+    console.error("PATCH /api/sessions/:id error:", error);
+    return Response.json({ error: error?.message || "Failed" }, { status: 500 });
+  }
+}
+
 // DELETE /api/sessions -> Clear all sessions
 export async function DELETE() {
   try {
