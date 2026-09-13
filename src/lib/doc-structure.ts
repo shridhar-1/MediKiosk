@@ -300,7 +300,7 @@ async function viaGeminiVision(
   const tryOrder = [...new Set(["gemini-flash-latest", discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
   if (discovered) notes.push(`discovered: ${discovered}`);
   for (const model of tryOrder) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       // 2.5-family models THINK by default — thinking tokens eat the whole
       // output budget and the answer comes back empty. Disable thinking
@@ -326,10 +326,12 @@ async function viaGeminiVision(
           }),
         },
       );
-      if (!res.ok) {
-        if (res.status >= 500 && attempt === 1) {
+            if (!res.ok) {
+        if (res.status >= 500 && attempt < 4) {
           notes.push(`${model}: HTTP ${res.status} (retrying)`);
-          continue; // overloaded — one immediate retry
+          // backoff — Gemini overload windows usually pass in a few seconds
+          await new Promise((r) => setTimeout(r, 1200 * attempt));
+          continue;
         }
         notes.push(`${model}: HTTP ${res.status}`);
         break;
