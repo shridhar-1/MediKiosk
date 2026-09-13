@@ -545,6 +545,23 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setBusy(false);
   }
 
+  // Undo an uploaded document — removes it from the patient's record before
+  // the summary is built (the doctor timeline only sees what remains).
+  async function removeDoc(docId: string) {
+    if (!sessionId) return;
+    try {
+      setError("");
+      const res = await fetch(`/api/sessions/${sessionId}/documents?docId=${docId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Could not remove the document — please try again.");
+      setDocs((d) => d.filter((x) => x.id !== docId));
+      setDupNotice("");
+    } catch (e: any) {
+      setError(e?.message || "Could not remove the document");
+    }
+  }
+
   async function performOCRAndUpload(file: File) {
     if (!sessionId) return;
     if (!isValidDocumentFile(file)) {
@@ -1701,10 +1718,21 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                 <ul className="mt-6 space-y-3">
                   {docs.map((d) => (
                     <li key={d.id} className="rounded-3xl bg-[#f6f0e4] p-4">
-                      <p className="font-semibold">{d.fileName}</p>
-                      <p className="text-xs text-[#4a4338]">
-                        {d.facilityName} · {d.documentDate}
-                      </p>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="font-semibold">{d.fileName}</p>
+                          <p className="text-xs text-[#4a4338]">
+                            {d.facilityName} · {d.documentDate}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void removeDoc(d.id)}
+                          className="shrink-0 rounded-full border border-[#b42318]/30 px-3 py-1 text-xs font-semibold text-[#b42318] transition hover:bg-[#f4d4cf]"
+                        >
+                          ✕ Remove
+                        </button>
+                      </div>
                       {d.extractedJson && (
                         <p className="mt-2 text-sm">
                           {d.extractedJson.labs.filter((l) => l.abnormal).length > 0 && (
