@@ -431,6 +431,42 @@ function matchLastQuestion(lastAssistant: string, lang: string): "meds" | "aller
   return null;
 }
 
+/** Which essential topic does a question mention? (paraphrase-tolerant) */
+function questionTopic(text: string): "meds" | "allergy" | "pmh" | null {
+  const t = text.toLowerCase();
+  if (/allerg|एलर्ज|ಅಲರ್ಜ|ஒவ்வா|అలర్జ|অ্যালার্জ/.test(t)) return "allergy";
+  if (/medicin|medication|tablet|drug|दवा|औषध|ಔಷಧ|மருந்த|మందు|ওষুধ|মেডিসিন/.test(t)) return "meds";
+  if (/disease|diabet|blood pressure|\bbp\b|asthma|बीमार|रोग|ಕಾಯಿಲೆ|நோய|వ్యాధి|রোগ|অসুস্থ/.test(t)) return "pmh";
+  return null;
+}
+
+/**
+ * Reconstruct KNOWN state from the WHOLE history: every essential question
+ * that already got a short yes/no answer is answered — never re-ask it.
+ * Used by BOTH the AI path and the naive fallback (LLM-proof).
+ */
+function markKnownFromHistory(turns: ChatTurn[], lang: string, e: ExtractedIntake): void {
+  let pending: "meds" | "allergy" | "pmh" | null = null;
+  for (const t of turns) {
+    if (t.who === "assistant") {
+      pending = matchLastQuestion(t.text, lang) ?? questionTopic(t.text);
+    } else if (pending && (BARE_YES.test(t.text) || BARE_NO.test(t.text))) {
+      if (BARE_NO.test(t.text)) {
+        if (pending === "meds") { e.medications = []; e.medicationsKnown = true; }
+        if (pending === "allergy") { e.allergies = []; e.allergiesKnown = true; }
+        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "None reported"; e.pmhKnown = true; }
+      } else {
+        if (pending === "meds" && e.medications.length === 0) { e.medications = ["Names not stated yet"]; e.medicationsKnown = true; }
+        if (pending === "allergy" && e.allergies.length === 0) { e.allergies = ["Not stated yet"]; e.allergiesKnown = true; }
+        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "Yes — details not stated"; e.pmhKnown = true; }
+      }
+      pending = null;
+    } else if (t.who === "patient") {
+      pending = null;
+    }
+  }
+}
+
 /**
  * Chat → structured intake. Multi-turn: the whole conversation is re-read
  * every turn, so answers to follow-ups merge into one file. AI lanes first,
@@ -484,6 +520,19 @@ export async function extractIntake(text: string, history: ChatTurn[] = [], lang
       if (result.followUp && result.followUp.trim().toLowerCase() === lastAssistant.trim().toLowerCase()) {
         result.followUp = "";
       }
+      // Deterministic never-re-ask (LLM-proof): a question the conversation
+      // already answered with a short yes/no is KNOWN — even if the model
+      // re-asks it in different words. Swap it for the next unknown essential.
+      markKnownFromHistory(turns, lang, result.extracted);
+      if (result.followUp) {
+        const asked = matchLastQuestion(result.followUp, lang) ?? questionTopic(result.followUp);
+        const known =
+          asked === "meds" ? result.extracted.medicationsKnown
+          : asked === "allergy" ? result.extracted.allergiesKnown
+          : asked === "pmh" ? result.extracted.pmhKnown
+          : false;
+        if (known) result.followUp = naiveFollowUp(result.extracted, lang);
+      }
       // Hard cap: never ask more than 3 follow-ups total.
       if (priorPatientTurns >= 3) result.followUp = "";
       return result;
@@ -507,27 +556,8 @@ export async function extractIntake(text: string, history: ChatTurn[] = [], lang
   const naive = naiveExtract(patientText);
   const e = naive.extracted;
 
-  // Reconstruct KNOWN state from the WHOLE history: every assistant question
-  // that already got a bare yes/no answer is answered — never re-ask it.
-  let pending: "meds" | "allergy" | "pmh" | null = null;
-  for (const t of turns) {
-    if (t.who === "assistant") {
-      pending = matchLastQuestion(t.text, lang);
-    } else if (pending && (BARE_YES.test(t.text) || BARE_NO.test(t.text))) {
-      if (BARE_NO.test(t.text)) {
-        if (pending === "meds") { e.medications = []; e.medicationsKnown = true; }
-        if (pending === "allergy") { e.allergies = []; e.allergiesKnown = true; }
-        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "None reported"; e.pmhKnown = true; }
-      } else {
-        if (pending === "meds" && e.medications.length === 0) { e.medications = ["Names not stated yet"]; e.medicationsKnown = true; }
-        if (pending === "allergy" && e.allergies.length === 0) { e.allergies = ["Not stated yet"]; e.allergiesKnown = true; }
-        if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "Yes — details not stated"; e.pmhKnown = true; }
-      }
-      pending = null;
-    } else if (t.who === "patient") {
-      pending = null;
-    }
-  }
+  // Reconstruct KNOWN state from the WHOLE history (shared with the AI path).
+  markKnownFromHistory(turns, lang, e);
 
   return {
     ...naive,

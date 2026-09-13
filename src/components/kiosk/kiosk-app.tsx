@@ -449,6 +449,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   }
 
     // ── Fast chat: conversation → AI extraction → same question keys ────────
+  // Tap-to-fix for the AI-mode review step (no typing needed on a kiosk).
+  function patchChatDone(patch: Partial<ExtractedIntake>) {
+    setChatDone((c) => (c ? { ...c, extracted: { ...c.extracted, ...patch } } : c));
+  }
+
   async function submitChat() {
     if (!sessionId) return;
     const msg = chatText.trim();
@@ -1281,6 +1286,13 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                       <textarea
                         value={chatText}
                         onChange={(e) => setChatText(e.target.value)}
+                        onKeyDown={(e) => {
+                          // Enter sends (Shift+Enter = new line) — kiosk-standard chat
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            if (!chatBusy && chatText.trim()) void submitChat();
+                          }
+                        }}
                         placeholder={
                           "Example: I have chest pain and sweating since 2 days, pain is 8 out of 10. " +
                           "I take telmisartan 40 and brufen. I am allergic to sulfa drugs. " +
@@ -1349,6 +1361,42 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                               {label}
                             </span>
                             <span className="text-base text-[#1b1712]">{value?.trim() ? value : "—"}</span>
+                            {label === "Duration" && (
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {["Today", "Yesterday", "2 days", "3 days", "1 week", "2 weeks", "1 month"].map((v) => (
+                                  <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => patchChatDone({ durationText: v })}
+                                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                      value?.trim() === v
+                                        ? "border-[#0f5c61] bg-[#0f5c61] text-white"
+                                        : "border-[#1b1712]/15 bg-[#f6f0e4] text-[#1b1712] hover:bg-[#e8dfd0]"
+                                    }`}
+                                  >
+                                    {v}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {label === "Severity (1–10)" && (
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {Array.from({ length: 10 }, (_, i) => String(i + 1)).map((v) => (
+                                  <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => patchChatDone({ severity: v })}
+                                    className={`h-8 w-8 rounded-full border text-xs font-bold transition ${
+                                      value?.trim() === v
+                                        ? "border-[#0f5c61] bg-[#0f5c61] text-white"
+                                        : "border-[#1b1712]/15 bg-[#f6f0e4] text-[#1b1712] hover:bg-[#e8dfd0]"
+                                    }`}
+                                  >
+                                    {v}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
