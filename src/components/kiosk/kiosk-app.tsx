@@ -12,6 +12,36 @@ import {
   YES_NO_OPTIONS,
 } from "@/lib/interview";
 import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
+
+// Real demo papers (images in /public/demo) that evaluators can view and run
+// through the exact same pipeline as a patient photograph: Tesseract OCR →
+// confidence check → vision AI for handwriting.
+const DEMO_DOCS = [
+  {
+    file: "/demo/demo-rx-printed.jpg",
+    name: "demo-rx-printed.jpg",
+    label: "Printed prescription",
+    hint: "clean OCR → structured record",
+  },
+  {
+    file: "/demo/demo-rx-handwritten.jpg",
+    name: "demo-rx-handwritten.jpg",
+    label: "Handwritten prescription",
+    hint: "weak OCR → vision AI verifies",
+  },
+  {
+    file: "/demo/demo-lab-report.jpg",
+    name: "demo-lab-report.jpg",
+    label: "Lab report",
+    hint: "abnormal values → flags",
+  },
+  {
+    file: "/demo/demo-rx-bengali.jpg",
+    name: "demo-rx-bengali.jpg",
+    label: "Bengali handwriting",
+    hint: "9 medicines, read by vision AI",
+  },
+];
 import { performOCR, isValidDocumentFile, fileToDownscaledBase64 } from "@/lib/document-ocr";
 import { canRecognize, speak, startRecognition, stopSpeaking } from "@/lib/speech";
 import { classifyUtterance } from "@/lib/utterance-guard";
@@ -484,7 +514,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sampleId }),
     });
-        const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+    const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
     if (data.duplicate) {
       setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
     } else {
@@ -505,7 +535,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         sourceText: paste,
       }),
     });
-        const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+    const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
     if (data.duplicate) {
       setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
     } else {
@@ -514,6 +544,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     setPaste("");
     setBusy(false);
   }
+
   async function performOCRAndUpload(file: File) {
     if (!sessionId) return;
     if (!isValidDocumentFile(file)) {
@@ -564,7 +595,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
           ocrConfidence,
         }),
       });
-            const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
+      const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
       if (data.duplicate) {
         setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
       } else {
@@ -577,6 +608,21 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     } finally {
       setUploading(false);
       setTimeout(() => setOcrProgress(0), 2000);
+    }
+  }
+
+  // Evaluator demo: fetch a public demo image and push it through the REAL
+  // upload pipeline (Tesseract → vision AI) exactly like a patient photo.
+  async function tryDemoDoc(url: string, name: string) {
+    try {
+      setError("");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("Demo file not found");
+      const blob = await res.blob();
+      const file = new File([blob], name, { type: blob.type || "image/jpeg" });
+      await performOCRAndUpload(file);
+    } catch (e: any) {
+      setError(e?.message || "Could not load the demo prescription");
     }
   }
 
@@ -1513,7 +1559,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
           {step === "documents" && (
             <div className="rise mx-auto max-w-4xl">
-                            <h1 className="serif text-4xl">{t("documentsTitle", lang)}</h1>
+              <h1 className="serif text-4xl">{t("documentsTitle", lang)}</h1>
               <p className="mt-3 text-[#4a4338]">{t("documentsHelp", lang)}</p>
               {dupNotice && (
                 <p className="mt-3 rounded-2xl bg-[#0f5c61]/10 px-4 py-3 text-sm text-[#0f5c61]">
@@ -1588,6 +1634,38 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="rounded-3xl border border-[#c9842a]/30 bg-[#fffdf7] p-5">
+                  <p className="text-xs uppercase tracking-wider text-[#c9842a]">
+                    Evaluator demo prescriptions — real images, real pipeline
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {DEMO_DOCS.map((demo) => (
+                      <div key={demo.file} className="flex items-center gap-3 rounded-2xl border border-[#1b1712]/10 bg-white p-3">
+                        <a href={demo.file} target="_blank" rel="noreferrer" className="shrink-0" title="View full image">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={demo.file} alt={demo.label} className="h-16 w-12 rounded-lg border border-[#1b1712]/10 object-cover" />
+                        </a>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold">{demo.label}</p>
+                          <p className="truncate text-xs text-[#4a4338]">{demo.hint}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void tryDemoDoc(demo.file, demo.name)}
+                          disabled={uploading}
+                          className="shrink-0 rounded-full bg-[#0f5c61] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                        >
+                          Try it
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[11px] text-[#4a4338]/70">
+                    Tap a thumbnail to view the paper. "Try it" runs it through the same pipeline as a
+                    patient photo: Tesseract OCR → confidence check → vision AI for handwriting.
+                  </p>
                 </div>
               </div>
 
