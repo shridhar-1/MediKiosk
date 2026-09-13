@@ -35,6 +35,7 @@ export type ExtractResult = {
   reply: string; // conversational answer when !isMedical
   extracted: ExtractedIntake;
   followUp: string; // ONE gap-filling question, "" when essentials covered
+  warnings?: string[]; // contradictions between earlier answers and new info
   engine: string; // "AI · model" | "local · model" | "naive-parser" | "intake-guard"
   aiUsed: boolean;
 };
@@ -452,8 +453,9 @@ function markKnownFromHistory(turns: ChatTurn[], lang: string, e: ExtractedIntak
       pending = matchLastQuestion(t.text, lang) ?? questionTopic(t.text);
     } else if (pending && (BARE_YES.test(t.text) || BARE_NO.test(t.text))) {
       if (BARE_NO.test(t.text)) {
-        if (pending === "meds") { e.medications = []; e.medicationsKnown = true; }
-        if (pending === "allergy") { e.allergies = []; e.allergiesKnown = true; }
+        // no-wipe: a later message with real values wins over an earlier "no"
+        if (pending === "meds" && e.medications.length === 0) { e.medications = []; e.medicationsKnown = true; }
+        if (pending === "allergy" && e.allergies.length === 0) { e.allergies = []; e.allergiesKnown = true; }
         if (pending === "pmh" && !e.pastMedical) { e.pastMedical = "None reported"; e.pmhKnown = true; }
       } else {
         if (pending === "meds" && e.medications.length === 0) { e.medications = ["Names not stated yet"]; e.medicationsKnown = true; }
@@ -465,6 +467,37 @@ function markKnownFromHistory(turns: ChatTurn[], lang: string, e: ExtractedIntak
       pending = null;
     }
   }
+}
+
+/** Which essentials were answered with a bare "no" in the turns GIVEN
+ *  (pass the history WITHOUT the current message). */
+function priorNoAnswers(turns: ChatTurn[], lang: string): { meds: boolean; allergy: boolean; pmh: boolean } {
+  const out = { meds: false, allergy: false, pmh: false };
+  let pending: "meds" | "allergy" | "pmh" | null = null;
+  for (const t of turns) {
+    if (t.who === "assistant") {
+      pending = matchLastQuestion(t.text, lang) ?? questionTopic(t.text);
+    } else if (pending && BARE_NO.test(t.text)) {
+      out[pending] = true;
+      pending = null;
+    } else if (t.who === "patient") {
+      pending = null;
+    }
+  }
+  return out;
+}
+
+/** Wrong-info guard: new details that CONTRADICT an earlier "no" get a
+ *  warning. The latest info is kept — the doctor confirms at consultation. */
+function contradictionWarnings(prior: { meds: boolean; allergy: boolean; pmh: boolean }, e: ExtractedIntake): string[] {
+  const w: string[] = [];
+  if (prior.meds && e.medications.length > 0)
+    w.push(`You said earlier that you take no medicines, but this message mentions: ${e.medications.join(", ")}. We kept the latest — the doctor will confirm.`);
+  if (prior.allergy && e.allergies.length > 0)
+    w.push(`You said earlier that you have no allergies, but this message mentions: ${e.allergies.join(", ")}. The doctor will confirm.`);
+  if (prior.pmh && e.pastMedical && e.pastMedical !== "None reported")
+    w.push(`You said earlier that you have no past illnesses, but this message mentions: ${e.pastMedical}. The doctor will confirm.`);
+  return w;
 }
 
 /**
@@ -533,6 +566,8 @@ export async function extractIntake(text: string, history: ChatTurn[] = [], lang
           : false;
         if (known) result.followUp = naiveFollowUp(result.extracted, lang);
       }
+      // Wrong-info guard: contradictions with earlier answers → warning
+      result.warnings = contradictionWarnings(priorNoAnswers(history, lang), result.extracted);
       // Hard cap: never ask more than 3 follow-ups total.
       if (priorPatientTurns >= 3) result.followUp = "";
       return result;
@@ -563,5 +598,6 @@ export async function extractIntake(text: string, history: ChatTurn[] = [], lang
     ...naive,
     extracted: e,
     followUp: priorPatientTurns >= 3 ? "" : naiveFollowUp(e, lang),
+    warnings: contradictionWarnings(priorNoAnswers(history, lang), e),
   };
 }

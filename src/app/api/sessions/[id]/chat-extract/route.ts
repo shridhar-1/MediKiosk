@@ -47,7 +47,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       .slice(-12);
 
     // 1) Greeting guard / AI / naive — extraction from the whole conversation
-    const { isMedical, reply, extracted, followUp, engine, aiUsed } = await extractIntake(text, history, lang);
+    const { isMedical, reply, extracted, followUp, engine, aiUsed, warnings } = await extractIntake(text, history, lang);
     if (!isMedical) {
       // greetings & chit-chat: answer warmly, write nothing, no fake file
       return Response.json({ chat: true, reply, engine, aiUsed });
@@ -140,7 +140,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       })
       .where(eq(sessions.id, id));
 
-    return Response.json({ extracted, engine, aiUsed, flags, followUp });
+    return Response.json({ extracted, engine, aiUsed, flags, followUp, warnings });
   } catch (error: any) {
     console.error("POST chat-extract error:", error);
     return Response.json({ error: error?.message || "Failed" }, { status: 500 });

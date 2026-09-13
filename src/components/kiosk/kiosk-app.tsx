@@ -11,8 +11,6 @@ import {
   questionProgress,
   YES_NO_OPTIONS,
 } from "@/lib/interview";
-import { SAMPLE_DOCUMENTS } from "@/lib/ocr";
-
 // Real demo papers (images in /public/demo) that evaluators can view and run
 // through the exact same pipeline as a patient photograph: Tesseract OCR →
 // confidence check → vision AI for handwriting.
@@ -203,8 +201,8 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
   const [chatText, setChatText] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
   const [chatMsgs, setChatMsgs] = useState<{ who: "you" | "ai"; text: string }[]>([]);
-  const [chatDraft, setChatDraft] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean } | null>(null);
-  const [chatDone, setChatDone] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean } | null>(null);
+  const [chatDraft, setChatDraft] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean; warnings?: string[] } | null>(null);
+  const [chatDone, setChatDone] = useState<{ extracted: ExtractedIntake; engine: string; aiUsed: boolean; warnings?: string[] } | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
 
   const question = questionById(qid);
@@ -456,6 +454,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
 
   async function submitChat() {
     if (!sessionId) return;
+    if (chatBusy) return; // double-send guard (Enter + button race)
     const msg = chatText.trim();
     if (!msg) {
       setError("Please type or speak your problem first.");
@@ -484,6 +483,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         aiUsed: boolean;
         followUp?: string;
         flags?: { triggered: boolean; priority: string; reasons: string[] };
+        warnings?: string[];
         error?: string;
       };
       if (!res.ok) throw new Error(data.error || "Could not build your file. Please use the guided questions.");
@@ -493,7 +493,11 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
         setChatMsgs((m) => [...m, { who: "ai", text: data.reply || "Please tell me what health problem you have." }]);
         return;
       }
-      if (data.extracted) setChatDraft({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed });
+      if (data.extracted) setChatDraft({ extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed, warnings: data.warnings });
+      // wrong-info guard: contradictions surface immediately in the chat
+      if (data.warnings?.length) {
+        setChatMsgs((m) => [...m, { who: "ai", text: "⚠️ " + data.warnings!.join(" ") }]);
+      }
       // essentials still missing → one focused follow-up question at a time
            if (data.followUp && history.filter((x) => x.who === "patient").length < 3) {
         setChatMsgs((m) => [...m, { who: "ai", text: data.followUp! }]);
@@ -501,7 +505,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
       }
       setChatDone(
         data.extracted
-          ? { extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed }
+          ? { extracted: data.extracted, engine: data.engine, aiUsed: data.aiUsed, warnings: data.warnings }
           : chatDone,
       );
     } catch (e) {
@@ -509,23 +513,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
     } finally {
       setChatBusy(false);
     }
-  }
-
-  async function addSample(sampleId: string) {
-    if (!sessionId) return;
-    setBusy(true);
-    const res = await fetch(`/api/sessions/${sessionId}/documents`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sampleId }),
-    });
-    const data = (await res.json()) as { document: DocRow; duplicate?: boolean };
-    if (data.duplicate) {
-      setDupNotice(`"${data.document.fileName}" is already in your medical record — no duplicate created.`);
-    } else {
-      setDocs((d) => [...d, data.document]);
-    }
-    setBusy(false);
   }
 
   async function addPasted() {
@@ -1340,6 +1327,13 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                         Built by <span className="font-semibold text-[#0f5c61]">{chatDone.engine}</span> ·
                         your doctor will double-check everything.
                       </p>
+                      {chatDone.warnings && chatDone.warnings.length > 0 && (
+                        <div className="rounded-2xl border border-[#c9842a]/40 bg-[#fff8ec] p-4 text-sm text-[#8a5a00]">
+                          {chatDone.warnings.map((w) => (
+                            <p key={w}>⚠️ {w}</p>
+                          ))}
+                        </div>
+                      )}
                       <div className="space-y-3 rounded-3xl border border-[#1b1712]/10 bg-white p-5 text-left">
                         {(
                           [
@@ -1680,24 +1674,6 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
                     
                     <p className="mt-3 text-[11px] text-[#4a4338]/70">Secure: Images processed client-side, only extracted text sent to server per DPDP Act 2023</p>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-[#c9842a]">Or try sample documents (AIIMS, Safdarjung, KEM, AIIA) - Demo</p>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    {SAMPLE_DOCUMENTS.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => void addSample(s.id)}
-                        className="rounded-3xl border border-[#1b1712]/10 bg-white p-5 text-left hover:border-[#0f5c61]/40"
-                      >
-                        <span className="text-xs uppercase tracking-wider text-[#c9842a]">{s.docType}</span>
-                        <span className="mt-1 block font-semibold">{s.fileName}</span>
-                        <span className="mt-1 block text-sm text-[#4a4338]">{s.facilityName}</span>
-                      </button>
-                    ))}
                   </div>
                 </div>
 
