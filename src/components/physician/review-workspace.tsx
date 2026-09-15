@@ -10,7 +10,7 @@ type Bundle = {
   session: Session;
   patient: Patient;
   answers: HistoryResponse[];
-  documents: Document[];
+  documents: (Omit<Document, "imageBase64"> & { hasImage?: boolean })[];
   summary: ClinicalSummary | null;
   consents: Consent[];
   events: HisEvent[];
@@ -49,6 +49,27 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
     (summary?.patientAdvice as string | undefined) ?? ""
   );
   const [reviewedBy, setReviewedBy] = useState(session.reviewedBy ?? reviewer ?? "");
+  // Original-scan viewer: fetch the stored image on demand (never in lists)
+  const [viewingDoc, setViewingDoc] = useState<{ name: string; date: string; src: string } | null>(null);
+  const [viewBusy, setViewBusy] = useState(false);
+  async function viewOriginal(doc: Omit<Document, "imageBase64"> & { hasImage?: boolean }) {
+    try {
+      setViewBusy(true);
+      const res = await fetch(`/api/sessions/${session.id}/documents?docId=${doc.id}`);
+      const data = (await res.json()) as { document?: { imageBase64?: string | null } };
+      if (!res.ok || !data.document?.imageBase64) throw new Error("Scan not stored for this document");
+      const b64 = data.document.imageBase64.replace(/^data:[^,]+,/, "");
+      setViewingDoc({
+        name: doc.fileName,
+        date: doc.documentDate ?? "",
+        src: `data:${doc.mimeType || "image/jpeg"};base64,${b64}`,
+      });
+    } catch {
+      setViewingDoc(null);
+    } finally {
+      setViewBusy(false);
+    }
+  }
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -391,6 +412,16 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
                 <p className="text-sm font-medium">{d.fileName}</p>
                 <p className="text-xs text-[#4a4338]">{d.facilityName}</p>
                 {d.extractedJson?.diagnoses?.length ? <p className="mt-1 text-xs">{d.extractedJson.diagnoses.join(" | ")}</p> : null}
+                {d.hasImage && (
+                  <button
+                    type="button"
+                    onClick={() => void viewOriginal(d)}
+                    disabled={viewBusy}
+                    className="mt-1.5 rounded-full border border-[#0f5c61]/40 px-3 py-1 text-[11px] font-semibold text-[#0f5c61] transition hover:bg-[#e6f2f0] disabled:opacity-50"
+                  >
+                    📄 View original scan
+                  </button>
+                )}
               </li>
             ))}
             {timeline.length === 0 && <p className="text-sm text-[#4a4338]">No papers attached.</p>}
@@ -410,6 +441,30 @@ export function ReviewWorkspace({ bundle, reviewer }: { bundle: Bundle; reviewer
           </ul>
         </section>
       </aside>
+
+      {viewingDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setViewingDoc(null)}>
+          <div
+            className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b p-4">
+              <div>
+                <h3 className="font-bold text-[#08363a]">Original document</h3>
+                <p className="text-xs text-[#4a4338]">{viewingDoc.name}{viewingDoc.date ? ` · ${viewingDoc.date}` : ""}</p>
+              </div>
+              <button onClick={() => setViewingDoc(null)} className="rounded-full bg-[#f6f0e4] px-3 py-1 text-xs">Close</button>
+            </div>
+            <div className="overflow-auto bg-[#1b1712]/5 p-4">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={viewingDoc.src} alt="Original document scan" className="mx-auto max-w-full rounded-xl" />
+            </div>
+            <p className="border-t p-3 text-center text-[11px] text-[#4a4338]">
+              Stored with the patient&rsquo;s Document-Scan consent · verify AI extraction against the source paper
+            </p>
+          </div>
+        </div>
+      )}
 
       {showFhir && fhirJson && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">

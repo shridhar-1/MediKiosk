@@ -31,7 +31,10 @@ export async function loadSessionBundle(sessionId: string) {
     .from(hisEvents)
     .where(eq(hisEvents.sessionId, sessionId))
     .orderBy(desc(hisEvents.createdAt));
-  return { session, patient, answers, documents: docs, summary: summary ?? null, consents: consentRows, events };
+  // hasImage without the payload: the scan is fetched on demand via
+  // GET /api/sessions/:id/documents?docId=… — lists stay light.
+  const lightDocs = docs.map(({ imageBase64, ...rest }) => ({ ...rest, hasImage: Boolean(imageBase64) }));
+  return { session, patient, answers, documents: lightDocs, summary: summary ?? null, consents: consentRows, events };
 }
 
 export function answersMap(

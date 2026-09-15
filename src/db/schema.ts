@@ -113,6 +113,10 @@ export const documents = pgTable("documents", {
   extractedJson: jsonb("extracted_json").$type<ExtractedDocument>(),
   documentDate: text("document_date"),
   facilityName: text("facility_name"),
+  // Original scan (downscaled base64) — stored only for documents the patient
+  // consented to scan, so the doctor can verify the AI extraction against
+  // the source paper. Loaded on demand, never in list payloads.
+  imageBase64: text("image_base64"),
   createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
 });
 

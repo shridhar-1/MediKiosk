@@ -1698,7 +1698,7 @@ export function KioskApp({ account }: { account?: KioskAccount | null }) {
                     <input ref={fileInputRef} type="file" accept="image/*,.pdf,.txt" className="hidden" onChange={handleFileChange} />
                     <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileChange} />
                     
-                    <p className="mt-3 text-[11px] text-[#4a4338]/70">Secure: Images processed client-side, only extracted text sent to server per DPDP Act 2023</p>
+                    <p className="mt-3 text-[11px] text-[#4a4338]/70">Secure: scans are stored with your Document-Scan consent so your doctor can view the original — DPDP Act 2023</p>
                   </div>
                 </div>
 

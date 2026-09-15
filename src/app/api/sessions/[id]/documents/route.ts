@@ -8,10 +8,20 @@ import { eq } from "drizzle-orm";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
+  const { searchParams } = new URL(request.url);
+  const docId = searchParams.get("docId");
+  if (docId) {
+    // single document WITH the original scan — doctor's "view original"
+    const [doc] = await db.select().from(documents).where(eq(documents.id, docId)).limit(1);
+    if (!doc) return Response.json({ error: "Not found" }, { status: 404 });
+    return Response.json({ document: doc });
+  }
   const rows = await db.select().from(documents).where(eq(documents.sessionId, id));
-  return Response.json({ documents: rows });
+  // lists stay light: hasImage flag instead of the base64 payload
+  const light = rows.map(({ imageBase64, ...rest }) => ({ ...rest, hasImage: Boolean(imageBase64) }));
+  return Response.json({ documents: light });
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -47,7 +57,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     facilityName = sample.facilityName;
   }
 
-    // ── Duplicate detection: the same paper must not enter the timeline twice.
+  // ── Duplicate detection: the same paper must not enter the timeline twice.
   // Patients re-upload the same old prescription at every visit; evaluators
   // re-click the same sample. If this patient already has this exact document
   // (same file + date, or identical text), return the existing row — no AI
@@ -62,10 +72,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       (sourceText.trim().length >= 40 && (d.sourceText ?? "").trim() === sourceText.trim()),
   );
   if (existing) {
-    return Response.json({ document: existing, duplicate: true });
+    const { imageBase64, ...rest } = existing;
+    return Response.json({ document: { ...rest, hasImage: Boolean(imageBase64) }, duplicate: true });
   }
 
-  // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
   // ── Handwriting pass (feature 5+): weak/no OCR text + a photo → the
   // vision AI reads the image itself and returns structure + a transcript.
   const ocrConfidence = typeof body.ocrConfidence === "number" ? body.ocrConfidence : null;
@@ -107,23 +117,39 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
   }
 
-  const [doc] = await db
-    .insert(documents)
-    .values({
-      id: nid(),
-      sessionId: id,
-      patientId: session.patientId,
-      docType,
-      fileName,
-      mimeType: body.mimeType ?? "text/plain",
-      sourceText,
-      extractedJson,
-      documentDate,
-      facilityName,
-    })
-    .returning();
+  const values = {
+    id: nid(),
+    sessionId: id,
+    patientId: session.patientId,
+    docType,
+    fileName,
+    mimeType: body.mimeType ?? "text/plain",
+    sourceText,
+    extractedJson,
+    documentDate,
+    facilityName,
+  };
+  // keep the original scan with the record (consent: document_scan) so the
+  // doctor can verify the extraction against the source paper. If the DB
+  // migration has not been pushed yet, insert without the scan — an upload
+  // must never fail.
+  const scan =
+    body.imageBase64 && body.imageBase64.length > 0 && body.imageBase64.length < 1_500_000
+      ? body.imageBase64
+      : null;
+  let doc: typeof documents.$inferSelect;
+  if (scan) {
+    try {
+      [doc] = await db.insert(documents).values({ ...values, imageBase64: scan }).returning();
+    } catch {
+      [doc] = await db.insert(documents).values(values).returning();
+    }
+  } else {
+    [doc] = await db.insert(documents).values(values).returning();
+  }
 
-  return Response.json({ document: doc, visionDebug: visionDebug || undefined });
+  const { imageBase64, ...docLight } = doc;
+  return Response.json({ document: { ...docLight, hasImage: Boolean(imageBase64) }, visionDebug: visionDebug || undefined });
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
