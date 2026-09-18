@@ -436,15 +436,12 @@ async function viaCloudflareVision(
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(18_000),
         body: JSON.stringify({
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
-                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } },
-              ],
-            },
-          ],
+          // Cloudflare's llama-3.2-vision NATIVE format (per Cloudflare docs):
+          // prompt + image as a BYTE ARRAY. The OpenAI-style messages/image_url
+          // shape is silently ignored by this model and returns an empty body.
+          prompt: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}`,
+          image: Array.from(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))),
+          max_tokens: 2048,
         }),
       },
     );
