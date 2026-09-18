@@ -418,6 +418,32 @@ export async function readDocumentByVision(
   return g;
 }
 
+/** Close a JSON string that was cut off mid-value: track string/escape
+ *  state and open brackets while scanning, then append the closers. Keeps
+ *  every complete field that was written before the cutoff. */
+function repairTruncatedJson(s: string): string | null {
+  if (!s.startsWith("{")) return null;
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (const ch of s) {
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  let out = s.replace(/"[^"]*"\s*:\s*$/, ""); // dangling key whose value was cut entirely
+  out = out.replace(/,\s*$/, ""); // ...then any comma it leaves behind
+  if (inStr) out += '"';
+  for (let i = stack.length - 1; i >= 0; i--) out += stack[i];
+  return out;
+}
+
 // ── Backup vision lane: Cloudflare Workers AI ───────────────────────────────
 // Free standing tier (10k neurons/day), Llama 3.2 11B Vision. Different
 // provider, different quota, different failure domain than Gemini.
@@ -439,7 +465,7 @@ async function viaCloudflareVision(
           // Cloudflare's llama-3.2-vision NATIVE format (per Cloudflare docs):
           // prompt + image as a BYTE ARRAY. The OpenAI-style messages/image_url
           // shape is silently ignored by this model and returns an empty body.
-          prompt: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}`,
+          prompt: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}\nKeep the transcript under 60 words. Respond with JSON only, no other text.`,
           image: Array.from(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))),
           max_tokens: 2048,
         }),
@@ -456,21 +482,29 @@ async function viaCloudflareVision(
     }
     const raw = (data.result?.response ?? "").trim();
     if (!raw) return { ok: null, debug: "empty response" };
-    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-    let parsed: RawVision;
+    const start = raw.indexOf("{");
+    if (start === -1) return { ok: null, debug: "no json in response" };
+    const json = raw.slice(start, raw.lastIndexOf("}") + 1);
+    // llama emits raw newlines inside strings (invalid JSON) — sanitize first
+    const sanitized = json.replace(/[\x00-\x1F\x7F]/g, " ");
+    let parsed: RawVision | null = null;
     try {
-      parsed = JSON.parse(json) as RawVision;
+      parsed = JSON.parse(sanitized) as RawVision;
     } catch {
-      // llama sometimes emits raw newlines/control chars inside string
-      // values — invalid for strict JSON.parse. Replace them and retry once.
-      const sanitized = json.replace(/[\x00-\x1F\x7F]/g, " ");
-      try {
-        parsed = JSON.parse(sanitized) as RawVision;
-      } catch (e2) {
-        const m = e2 instanceof Error ? e2.message.slice(0, 60) : "parse error";
-        return { ok: null, debug: `json: ${m}` };
+      parsed = null;
+    }
+    // output can also be TRUNCATED (token limit) mid-value — repair and retry
+    if (!parsed) {
+      const repaired = repairTruncatedJson(sanitized);
+      if (repaired) {
+        try {
+          parsed = JSON.parse(repaired) as RawVision;
+        } catch {
+          parsed = null;
+        }
       }
     }
+    if (!parsed) return { ok: null, debug: "json: unparseable" };
     return {
       ok: {
         doc: coerceAi(parsed),
