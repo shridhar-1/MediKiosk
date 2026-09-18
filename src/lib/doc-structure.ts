@@ -294,13 +294,22 @@ async function viaGeminiVision(
   const key = process.env.GEMINI_API_KEY;
   if (!key) return { ok: null, debug: "GEMINI_API_KEY not set" };
   const notes: string[] = [];
+  // Total time budget: the upload route must answer well inside Vercel's
+  // 60s function limit. If vision cannot succeed in ~35s, we give up and
+  // the deterministic regex extraction still structures the document —
+  // a 504 timeout helps nobody.
+  const deadline = Date.now() + 35_000;
   const discovered = await pickGeminiModel();
   // flash-latest first — it is the endpoint that has actually responded
   // (503 = exists, overloaded). Then the discovered name, then the rest.
   const tryOrder = [...new Set(["gemini-flash-latest", discovered, ...GEMINI_MODELS].filter((m): m is string => Boolean(m)))];
   if (discovered) notes.push(`discovered: ${discovered}`);
   for (const model of tryOrder) {
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+    if (Date.now() > deadline) {
+      notes.push("time budget exhausted");
+      return { ok: null, debug: notes.join(" | ") };
+    }
     try {
       // 2.5-family models THINK by default — thinking tokens eat the whole
       // output budget and the answer comes back empty. Disable thinking
@@ -312,7 +321,7 @@ async function viaGeminiVision(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(55_000),
+          signal: AbortSignal.timeout(15_000),
           body: JSON.stringify({
             contents: [
               {
@@ -327,11 +336,15 @@ async function viaGeminiVision(
         },
       );
             if (!res.ok) {
-        if (res.status >= 500 && attempt < 4) {
+        if (res.status === 429) {
+          // quota (per-minute or daily) — retrying THIS model is pointless;
+          // the next model name may live on a different quota bucket
+          notes.push(`${model}: HTTP 429 (quota)`);
+          break;
+        }
+        if (res.status >= 500 && attempt < 2) {
           notes.push(`${model}: HTTP ${res.status} (retrying)`);
-          // backoff — Gemini overload windows usually pass in a few seconds
-          await new Promise((r) => setTimeout(r, 1200 * attempt));
-          continue;
+          continue; // overloaded — one immediate retry
         }
         notes.push(`${model}: HTTP ${res.status}`);
         break;
