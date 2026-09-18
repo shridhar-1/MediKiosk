@@ -298,7 +298,7 @@ async function viaGeminiVision(
   // 60s function limit. If vision cannot succeed in ~35s, we give up and
   // the deterministic regex extraction still structures the document —
   // a 504 timeout helps nobody.
-  const deadline = Date.now() + 35_000;
+  const deadline = Date.now() + 45_000;
   const discovered = await pickGeminiModel();
   // flash-latest first — it is the endpoint that has actually responded
   // (503 = exists, overloaded). Then the discovered name, then the rest.
@@ -321,7 +321,7 @@ async function viaGeminiVision(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(15_000),
+          signal: AbortSignal.timeout(25_000),
           body: JSON.stringify({
             contents: [
               {
@@ -375,11 +375,10 @@ async function viaGeminiVision(
       };
         } catch (e) {
       const msg = e instanceof Error ? e.message.slice(0, 80) : "error";
-      if (attempt === 1 && /timeout|abort/i.test(msg)) {
-        notes.push(`${model}: ${msg} (retrying)`);
-        continue;
-      }
+      // a timeout already cost the attempt budget — retrying the same slow
+      // model would bust the deadline. Note it and move to the next model.
       notes.push(`${model}: ${msg}`);
+      break;
     }
     }
     // (no break here — a 404/parse-fail on one model must fall through
