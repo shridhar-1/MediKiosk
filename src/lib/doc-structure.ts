@@ -298,7 +298,10 @@ async function viaGeminiVision(
   // 60s function limit. If vision cannot succeed in ~35s, we give up and
   // the deterministic regex extraction still structures the document —
   // a 504 timeout helps nobody.
-  const deadline = Date.now() + 45_000;
+  // when the Cloudflare backup lane exists, keep the Gemini budget tighter
+  // so the whole route still answers inside Vercel's 60s function limit
+  const deadline = Date.now() +
+    (process.env.CF_AI_TOKEN && process.env.CF_ACCOUNT_ID ? 35_000 : 45_000);
   const discovered = await pickGeminiModel();
   // flash-latest first — it is the endpoint that has actually responded
   // (503 = exists, overloaded). Then the discovered name, then the rest.
@@ -401,8 +404,75 @@ export async function readDocumentByVision(
   if (b64.length < 500 || b64.length > 6_000_000) {
     return { ok: null, debug: `image size out of range (${b64.length} chars b64)` };
   }
-  // Groq retired its vision models (2026) — Gemini Flash is the vision lane.
-  return await viaGeminiVision(b64, docType);
+  // Groq retired its vision models (2026). Primary vision lane: Gemini Flash.
+  // Backup lane: Cloudflare Workers AI (llama-3.2-vision) — standing free
+  // tier, no training on customer data. Fires only when every Gemini model
+  // fails, so Google peak-hour congestion can never blind the kiosk.
+  const g = await viaGeminiVision(b64, docType);
+  if (g.ok) return g;
+  if (process.env.CF_AI_TOKEN && process.env.CF_ACCOUNT_ID) {
+    const cf = await viaCloudflareVision(b64, docType);
+    if (cf.ok) return cf;
+    return { ok: null, debug: `gemini: ${g.debug} | cf: ${cf.debug}` };
+  }
+  return g;
+}
+
+// ── Backup vision lane: Cloudflare Workers AI ───────────────────────────────
+// Free standing tier (10k neurons/day), Llama 3.2 11B Vision. Different
+// provider, different quota, different failure domain than Gemini.
+async function viaCloudflareVision(
+  b64: string,
+  docType: string,
+): Promise<{ ok: VisionResult | null; debug: string }> {
+  const token = process.env.CF_AI_TOKEN;
+  const accountId = process.env.CF_ACCOUNT_ID;
+  if (!token || !accountId) return { ok: null, debug: "CF not configured" };
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/meta/llama-3.2-11b-vision-instruct`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(18_000),
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: `${SYSTEM_VISION}\n\nDOCUMENT TYPE: ${docType}` },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${b64}` } },
+              ],
+            },
+          ],
+        }),
+      },
+    );
+    if (!res.ok) return { ok: null, debug: `HTTP ${res.status}` };
+    const data = (await res.json()) as {
+      success?: boolean;
+      result?: { response?: string };
+      errors?: { message?: string }[];
+    };
+    if (!data.success) {
+      return { ok: null, debug: data.errors?.[0]?.message?.slice(0, 80) || "cf error" };
+    }
+    const raw = (data.result?.response ?? "").trim();
+    if (!raw) return { ok: null, debug: "empty response" };
+    const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+    const parsed = JSON.parse(json) as RawVision;
+    return {
+      ok: {
+        doc: coerceAi(parsed),
+        transcript: typeof parsed.transcript === "string" ? parsed.transcript.slice(0, 6000) : "",
+        label: "AI · llama-vision (Cloudflare) 👁",
+      },
+      debug: "cf: ok",
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message.slice(0, 80) : "error";
+    return { ok: null, debug: msg };
+  }
 }
 
 /** Public merge with an explicit engine label (used by the vision path). */
