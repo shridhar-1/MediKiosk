@@ -457,7 +457,20 @@ async function viaCloudflareVision(
     const raw = (data.result?.response ?? "").trim();
     if (!raw) return { ok: null, debug: "empty response" };
     const json = raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-    const parsed = JSON.parse(json) as RawVision;
+    let parsed: RawVision;
+    try {
+      parsed = JSON.parse(json) as RawVision;
+    } catch {
+      // llama sometimes emits raw newlines/control chars inside string
+      // values — invalid for strict JSON.parse. Replace them and retry once.
+      const sanitized = json.replace(/[\x00-\x1F\x7F]/g, " ");
+      try {
+        parsed = JSON.parse(sanitized) as RawVision;
+      } catch (e2) {
+        const m = e2 instanceof Error ? e2.message.slice(0, 60) : "parse error";
+        return { ok: null, debug: `json: ${m}` };
+      }
+    }
     return {
       ok: {
         doc: coerceAi(parsed),
